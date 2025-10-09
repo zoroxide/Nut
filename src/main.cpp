@@ -302,6 +302,7 @@ void cursorPosCallback(GLFWwindow*, double xpos, double ypos) {
     pitch += (float)yoff;
     pitch = std::clamp(pitch, -89.0f, 89.0f);
 }
+
 void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     if (key >= 0 && key < 1024) {
         keys[key] = (action == GLFW_PRESS || action == GLFW_REPEAT);
@@ -312,7 +313,7 @@ void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     // Space bar for jump
     if (key == GLFW_KEY_SPACE && action == GLFW_PRESS && !jumping) {
         jumping = true;
-        jumpVel = 7.0f; // jump initial velocity
+        jumpVel = 7.0f; // jump initial velocity (ideal 7)
     }
 }
 
@@ -414,7 +415,7 @@ int main() {
     glDisable(GL_DEPTH_TEST);
     glUseProgram(shaderProgram);
     glUniform1i(glGetUniformLocation(shaderProgram, "renderSky"), 1);
-    // Draw a fullscreen triangle (no VAO needed in core profile, but you may need to set up a simple VAO if required)
+    // Draw a fullscreen triangle (no VAO needed in core profile, but may need to set up a simple VAO if required)
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glEnable(GL_DEPTH_TEST);
 
