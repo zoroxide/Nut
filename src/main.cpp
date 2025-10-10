@@ -380,7 +380,7 @@ int main() {
     buildTerrainMesh();
     uploadMeshToGPU();
 
-    grassTexture = loadTexture("assets/grass/Grass005.png");
+    grassTexture = loadTexture("assets/grass/grass.png");
     if (!grassTexture) std::cerr << "Warning: grass texture failed to load\n";
 
     glUseProgram(shaderProgram);
