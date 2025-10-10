@@ -126,8 +126,8 @@ GLuint createProgram(const char* vsPath, const char* fsPath) {
 
 // ---------- Terrain noise (perlin noise algorithm) ---------- //
 
-inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
-inline float fade(float t) { return t * t * (3.0f - 2.0f * t); }
+inline float lerp(float a, float b, float t) { return a + (b - a) * t; } // linear interpolation
+inline float fade(float t) { return t * t * (3.0f - 2.0f * t); }         // fade function for interpolation
 
 // Hash function to get a repeatable random value for integer coordinates
 int hashI(int x, int y) {
