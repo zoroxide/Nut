@@ -1,4 +1,6 @@
-# opengl-terrain-generator-and-renderer-with-controls-using Modern OpenGL, GLEW, GLM, stb_image and C++
+# opengl-terrain-generator-and-renderer
+
+Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image for image handling 
 
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/823029fa-c3c7-46e4-970b-842b513b22a7" />
 
