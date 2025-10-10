@@ -143,35 +143,45 @@ float valueNoise(int x, int y) {
 
 // Smooth noise by bilinear interpolation
 float smoothNoise(float x, float y) {
+    // Integer coordinates
     int xf = (int)floor(x);
     int yf = (int)floor(y);
 
+    // Fractional parts
     float xf_frac = x - xf;
     float yf_frac = y - yf;
 
+    // Get noise values at the corners
     float v00 = valueNoise(xf, yf);
     float v10 = valueNoise(xf + 1, yf);
     float v01 = valueNoise(xf, yf + 1);
     float v11 = valueNoise(xf + 1, yf + 1);
 
+    // Bilinear interpolation
     float i1 = lerp(v00, v10, fade(xf_frac));
     float i2 = lerp(v01, v11, fade(xf_frac));
 
+    // Final interpolation
     return lerp(i1, i2, fade(yf_frac));
 }
 
 // Fractal Brownian Motion (fbm) using multiple octaves of smooth noise
 float fbm(float x, float y) {
+    // Initial values
     float total = 0.0f;
     float amp = 1.0f;
     float freq = 1.0f;
     const int OCT = 6;
     const float gain = 0.5f;
+
+    // Sum octaves
     for (int i = 0; i < OCT; ++i) {
         total += amp * smoothNoise(x * freq, y * freq);
         freq *= 2.0f;
         amp *= gain;
     }
+
+    // return value in range [-1, 1] (normalized)
     return total;
 }
 
@@ -188,9 +198,11 @@ std::vector<GLuint> indices;
 
 // Build terrain mesh with proper normals and UVs
 void buildTerrainMesh() {
+    // Clear old data
     vertices.clear();
     indices.clear();
 
+    // Terrain parameters
     int N = TERRAIN_SIZE;
     float half = (N - 1) * 0.5f * TERRAIN_SCALE;
 
@@ -213,6 +225,7 @@ void buildTerrainMesh() {
     // --- Generate indices (fully connected grid) --- //
     for (int z = 0; z < N - 1; ++z) {
         for (int x = 0; x < N - 1; ++x) {
+            // Indices of the quad corners
             int tl = z * N + x;
             int tr = tl + 1;
             int bl = (z + 1) * N + x;
@@ -339,7 +352,6 @@ GLuint loadTexture(const char* path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // glBindTexture(GL_TEXTURE_2D, 0);
 
     // Free image memory
     stbi_image_free(data);
@@ -408,6 +420,8 @@ void updateMovement(float dt) {
     if (keys[GLFW_KEY_S]) move -= front * sp;
     if (keys[GLFW_KEY_A]) move -= right * sp;
     if (keys[GLFW_KEY_D]) move += right * sp;
+
+    // Update camera position
     cameraPos += move;
 
     // Clamp camera Y to terrain height + eye offset, with jump
@@ -432,8 +446,10 @@ void updateMovement(float dt) {
         }
 
     } else {
-        // Not jumping, just clamp to terrain
+        // Not jumping, just clamp to terrain (and resets when pressing again in mid air)
         // if (cameraPos.y < terrainY + eyeHeight) cameraPos.y = terrainY + eyeHeight;
+
+        // Always reset to terrain height when not jumping
         cameraPos.y = terrainY + eyeHeight;
     }
 }
@@ -464,7 +480,7 @@ int main() {
     glfwMakeContextCurrent(window);
 
     // Enable V-Sync
-    // glfwSwapInterval(1);
+    glfwSwapInterval(1); // 0 for no vsync, 1 for vsync
     glewExperimental = GL_TRUE;
 
     // handle failure
@@ -476,7 +492,7 @@ int main() {
     glfwSetKeyCallback(window, keyCallback);
 
     // OpenGL settings
-    // glViewport(0, 0, SCR_W, SCR_H);
+    // glViewport(0, 0, SCR_W, SCR_H); // windowed mode
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
 
