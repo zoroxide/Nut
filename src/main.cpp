@@ -1,6 +1,3 @@
-// Modern OpenGL (GLFW + GLEW + GLM) procedural terrain with fullscreen, locked mouse, Phong lighting and grass texture
-// Build: g++ -std=c++17 -Wall src/glfw-port.cpp -o build/program -lglfw -lGL -lGLEW
-
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
@@ -18,12 +15,11 @@
 #include <vector>
 #include <cmath>
 #include <chrono>
-#include <random>
 
 using Clock = std::chrono::high_resolution_clock;
 
 // ---------- Settings ----------
-const int TERRAIN_SIZE = 256;      // # vertices per side
+const int TERRAIN_SIZE = 256;      // vertices per side
 const float TERRAIN_SCALE = 1.0f;  // world spacing between vertices
 const float HEIGHT_SCALE = 6.0f;   // amplitude of terrain
 const float TEXTURE_TILE = 22.0f;  // how many times the grass texture tiles across the terrain
@@ -54,9 +50,11 @@ bool jumping = false;
 float jumpVel = 0.0f;
 
 // ---------- Utility ----------
+
 // Forward declaration for fbm
 float fbm(float x, float y);
 // Sample terrain height at world (x, z) using the same noise as mesh
+
 float getTerrainHeight(float wx, float wz) {
     // Convert world x,z to heightmap coordinates
     float half = (TERRAIN_SIZE - 1) * 0.5f * TERRAIN_SCALE;
@@ -387,9 +385,10 @@ int main() {
     glUniform3f(glGetUniformLocation(shaderProgram, "lightDir"), -0.2f, -1.0f, -0.3f);
     glUniform3f(glGetUniformLocation(shaderProgram, "lightColor"), 1.0f, 0.98f, 0.9f);
     glUniform1i(glGetUniformLocation(shaderProgram, "texture1"), 0);
+
     // Fog and sky panorama uniforms (reduced fog for clarity)
-    // glUniform3f(glGetUniformLocation(shaderProgram, "fogColor"), 0.53f, 0.8f, 1.0f); // sky blue
-    // glUniform1f(glGetUniformLocation(shaderProgram, "fogDensity"), 0.008f);
+    glUniform3f(glGetUniformLocation(shaderProgram, "fogColor"), 0.53f, 0.8f, 1.0f); // sky blue
+    glUniform1f(glGetUniformLocation(shaderProgram, "fogDensity"), 0.008f);
     glUniform1i(glGetUniformLocation(shaderProgram, "renderSky"), 0);
 
     lastFrame = Clock::now();
