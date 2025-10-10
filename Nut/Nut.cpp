@@ -78,7 +78,7 @@ bool Engine::init(bool fullscreen) {
     glDisable(GL_CULL_FACE);
 
     // Resources
-    shaderProgram_ = createProgram("./shaders/vertex.glsl", "./shaders/fragment.glsl");
+    shaderProgram_ = createProgram("Nut/shaders/vertex.glsl", "Nut/shaders/fragment.glsl");
     buildTerrainMesh();
     uploadMeshToGPU();
 
