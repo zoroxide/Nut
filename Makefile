@@ -1,9 +1,10 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall
-LIBS = -lglfw -lGL -lGLEW
-SRC = src/main.cpp
+LIBS = -lGLEW -lglfw -lGL -ldl -lpthread -lm
+SRC = main.cpp Nut/Nut.cpp
 OUT_DIR = build
-OUT = $(OUT_DIR)/program
+TARGET = program
+OUT = $(OUT_DIR)/$(TARGET)
 
 $(OUT): $(SRC)
 	mkdir -p $(OUT_DIR)
@@ -11,6 +12,8 @@ $(OUT): $(SRC)
 
 run: $(OUT)
 	./$(OUT)
+
+.PHONY: run clean
 
 clean:
 	rm -rf $(OUT_DIR)

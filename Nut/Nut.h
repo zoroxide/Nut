@@ -1,0 +1,77 @@
+#pragma once
+
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <string>
+#include <chrono>
+
+using Clock = std::chrono::high_resolution_clock;
+
+class Engine {
+public:
+    Engine();
+    ~Engine();
+
+    // Initialize the engine and create a window. Returns true on success.
+    // If fullscreen is true, a fullscreen window is created.
+    bool init(bool fullscreen = true);
+
+    // Load terrain texture from path and bind it for rendering.
+    void load_terrain_using_texture(const std::string &path);
+
+    // Enable or disable VSync (must be called after init or will be applied on next init)
+    void vsync(bool enabled);
+
+    // Enter the main loop and run until window close.
+    void mainloop();
+
+private:
+    // Internal state (opaque to users)
+    GLFWwindow* window_;
+    GLuint shaderProgram_;
+    GLuint vao_, vbo_, ebo_;
+    size_t indexCount_;
+    GLuint grassTexture_;
+
+    // Camera / movement
+    glm::vec3 cameraPos_;
+    float yaw_, pitch_;
+    float mouseSensitivity_;
+    float moveSpeed_;
+
+    // Mouse
+    double lastX_, lastY_;
+    bool firstMouse_;
+
+    // Timing
+    Clock::time_point lastFrame_;
+    float deltaTime_;
+
+    // Input
+    bool keys_[1024];
+    bool jumping_;
+    float jumpVel_;
+
+    bool vsyncEnabled_;
+
+    // Instance pointer for static callbacks
+    static Engine* s_instance_;
+
+    // Internal helpers (defined in engine implementation)
+    std::string loadFile(const char* path);
+    GLuint compileShaderFromFile(const char* path, GLenum type);
+    GLuint createProgram(const char* vsPath, const char* fsPath);
+    float fbm(float x, float y);
+    float getTerrainHeight(float wx, float wz);
+    void buildTerrainMesh();
+    void uploadMeshToGPU();
+    GLuint loadTexture(const char* path);
+
+    // Input helpers
+    static void cursorPosCallbackStatic(GLFWwindow* , double xpos, double ypos);
+    static void keyCallbackStatic(GLFWwindow* , int key, int scancode, int action, int mods);
+    void cursorPosCallback(double xpos, double ypos);
+    void keyCallback(int key, int scancode, int action, int mods);
+    void updateMovement(float dt);
+};

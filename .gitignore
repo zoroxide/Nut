@@ -1,6 +1,7 @@
-build/
+Nut/build/
 *.o
 *.out
 *.log
 *.tmp
 .DS_Store
+build/
