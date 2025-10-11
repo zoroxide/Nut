@@ -2,7 +2,9 @@
 
 Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image for image handling 
 
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/242c0160-3348-43c3-896a-9da0c6687416" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/823029fa-c3c7-46e4-970b-842b513b22a7" />
+
 
 # Controls
 - **WASD** for moving
