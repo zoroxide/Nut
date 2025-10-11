@@ -11,10 +11,10 @@ int main() {
     }
 
     // Load terrain texture
-    engine.load_terrain_using_texture("grass.png");
+    engine.load_terrain_using_texture("assets/grass.png");
 
     // Load panorama texture (optional)
-    if (!engine.panorama("citrus_orchard_puresky_4k.hdr")) {
+    if (!engine.panorama("assets/citrus_orchard_puresky_4k.hdr")) {
         std::cerr << "Failed to load panorama texture\n";
     }
 
