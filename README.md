@@ -2,7 +2,12 @@
 
 Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image for image handling 
 
+# Screenshots
+### using HDR panorama
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f3ffdeab-faa8-443a-b2bd-3d36c32b81de" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/242c0160-3348-43c3-896a-9da0c6687416" />
+
+### without using panorama
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/823029fa-c3c7-46e4-970b-842b513b22a7" />
 
 
