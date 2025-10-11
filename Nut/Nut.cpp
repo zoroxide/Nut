@@ -7,6 +7,8 @@
 // GLMs
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/string_cast.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 
 // STLs
 #include <iostream>
@@ -29,6 +31,7 @@ Engine* Engine::s_instance_ = nullptr;
 
 Engine::Engine()
     : window_(nullptr), shaderProgram_(0), vao_(0), vbo_(0), ebo_(0), indexCount_(0), grassTexture_(0),
+      panoramaTexture_(0), skyShader_(0), skyVAO_(0), skyVBO_(0),
       cameraPos_(0.0f, 6.0f, 12.0f), yaw_(-90.0f), pitch_(-15.0f), mouseSensitivity_(0.12f), moveSpeed_(6.0f),
       lastX_(0.0), lastY_(0.0), firstMouse_(true), lastFrame_(Clock::now()), deltaTime_(0.0f), jumping_(false), jumpVel_(0.0f), vsyncEnabled_(true)
 {
@@ -39,10 +42,14 @@ Engine::Engine()
 Engine::~Engine() {
     // Cleanup
     if (shaderProgram_) glDeleteProgram(shaderProgram_);
+    if (skyShader_) glDeleteProgram(skyShader_);
     if (grassTexture_) glDeleteTextures(1, &grassTexture_);
+    if (panoramaTexture_) glDeleteTextures(1, &panoramaTexture_);
     if (vbo_) glDeleteBuffers(1, &vbo_);
     if (ebo_) glDeleteBuffers(1, &ebo_);
     if (vao_) glDeleteVertexArrays(1, &vao_);
+    if (skyVBO_) glDeleteBuffers(1, &skyVBO_);
+    if (skyVAO_) glDeleteVertexArrays(1, &skyVAO_);
     if (window_) glfwTerminate();
 }
 
@@ -79,6 +86,25 @@ bool Engine::init(bool fullscreen) {
 
     // Resources
     shaderProgram_ = createProgram("Nut/shaders/vertex.glsl", "Nut/shaders/fragment.glsl");
+
+    // Create sky shader and full-screen triangle VAO
+    skyShader_ = createProgram("Nut/shaders/sky_vert.glsl", "Nut/shaders/sky_frag.glsl");
+    {
+        float skyVerts[] = {
+            -1.0f, -1.0f,
+             3.0f, -1.0f,
+            -1.0f,  3.0f
+        };
+        glGenVertexArrays(1, &skyVAO_);
+        glGenBuffers(1, &skyVBO_);
+        glBindVertexArray(skyVAO_);
+        glBindBuffer(GL_ARRAY_BUFFER, skyVBO_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(skyVerts), skyVerts, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+        glBindVertexArray(0);
+    }
+
     buildTerrainMesh();
     uploadMeshToGPU();
 
@@ -98,13 +124,17 @@ void Engine::load_terrain_using_texture(const std::string &path) {
 void Engine::mainloop() {
     if (!window_) return;
 
-    // Set some uniforms that don't change often
+    // Set some uniforms that don't change often (terrain shader)
     glUseProgram(shaderProgram_);
     glUniform3f(glGetUniformLocation(shaderProgram_, "lightDir"), -0.2f, -1.0f, -0.3f);
     glUniform3f(glGetUniformLocation(shaderProgram_, "lightColor"), 1.0f, 0.98f, 0.9f);
     glUniform1i(glGetUniformLocation(shaderProgram_, "texture1"), 0);
     glUniform3f(glGetUniformLocation(shaderProgram_, "fogColor"), 0.53f, 0.8f, 1.0f);
     glUniform1f(glGetUniformLocation(shaderProgram_, "fogDensity"), 0.008f);
+
+    // sky shader texture unit binding (panorama will be bound to unit 1 at render time)
+    glUseProgram(skyShader_);
+    glUniform1i(glGetUniformLocation(skyShader_, "panorama"), 1);
 
     int SCR_W, SCR_H;
     glfwGetWindowSize(window_, &SCR_W, &SCR_H);
@@ -128,20 +158,34 @@ void Engine::mainloop() {
         glm::mat4 proj = glm::perspective(glm::radians(60.0f), (float)SCR_W / (float)SCR_H, 0.1f, 500.0f);
         glm::mat4 model(1.0f);
 
-        // Sky
-        glDisable(GL_DEPTH_TEST);
-        glUseProgram(shaderProgram_);
-        glUniform1i(glGetUniformLocation(shaderProgram_, "renderSky"), 1);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-        glEnable(GL_DEPTH_TEST);
-
-        // Clear
+        // --- Clear first (important!) ---
         glClearColor(0.53f, 0.8f, 1.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Draw terrain
+        // --- Draw sky full-screen triangle ---
+        glDisable(GL_DEPTH_TEST);
+
+        glm::mat4 invProj = glm::inverse(proj);
+        glm::mat4 invView = glm::inverse(view);
+
+        glUseProgram(skyShader_);
+        glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invProj"), 1, GL_FALSE, glm::value_ptr(invProj));
+        glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invView"), 1, GL_FALSE, glm::value_ptr(invView));
+        glUniform1i(glGetUniformLocation(skyShader_, "hasPanorama"), panoramaTexture_ ? 1 : 0);
+
+        if (panoramaTexture_) {
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, panoramaTexture_);
+        }
+
+        glBindVertexArray(skyVAO_);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindVertexArray(0);
+
+        glEnable(GL_DEPTH_TEST);
+
+        // --- Then draw terrain ---
         glUseProgram(shaderProgram_);
-        glUniform1i(glGetUniformLocation(shaderProgram_, "renderSky"), 0);
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "mvp"), 1, GL_FALSE, glm::value_ptr(proj * view * model));
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "model"), 1, GL_FALSE, glm::value_ptr(model));
         glUniform3fv(glGetUniformLocation(shaderProgram_, "viewPos"), 1, glm::value_ptr(cameraPos_));
@@ -171,7 +215,7 @@ GLuint Engine::compileShaderFromFile(const char* path, GLenum type) {
     glShaderSource(sh, 1, &csrc, nullptr);
     glCompileShader(sh);
     GLint ok; glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if(!ok) { char buf[1024]; glGetShaderInfoLog(sh, 1024, nullptr, buf); std::cerr << "Shader compile error (" << path << "):\n" << buf << std::endl; }
+    if(!ok) { char buf[4096]; glGetShaderInfoLog(sh, 4096, nullptr, buf); std::cerr << "Shader compile error (" << path << "):\n" << buf << std::endl; }
     return sh;
 }
 
@@ -180,7 +224,7 @@ GLuint Engine::createProgram(const char* vsPath, const char* fsPath) {
     GLuint fs = compileShaderFromFile(fsPath, GL_FRAGMENT_SHADER);
     GLuint prog = glCreateProgram(); glAttachShader(prog, vs); glAttachShader(prog, fs); glLinkProgram(prog);
     GLint ok; glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-    if(!ok) { char buf[1024]; glGetProgramInfoLog(prog, 1024, nullptr, buf); std::cerr << "Program link error:\n" << buf << std::endl; }
+    if(!ok) { char buf[4096]; glGetProgramInfoLog(prog, 4096, nullptr, buf); std::cerr << "Program link error:\n" << buf << std::endl; }
     glDeleteShader(vs); glDeleteShader(fs); return prog;
 }
 
@@ -266,7 +310,28 @@ void Engine::uploadMeshToGPU() {
 }
 
 GLuint Engine::loadTexture(const char* path) {
-    int width, height, nrChannels; stbi_set_flip_vertically_on_load(true);
+    int width = 0, height = 0, nrChannels = 0;
+    // For panoramas, flipping vertically can be harmful; but keep user behavior consistent
+    stbi_set_flip_vertically_on_load(true);
+
+    // Detect HDR images and load accordingly
+    if (stbi_is_hdr(path)) {
+        float* dataf = stbi_loadf(path, &width, &height, &nrChannels, 0);
+        if (!dataf) { std::cerr << "Failed to load HDR texture: " << path << std::endl; return 0; }
+        GLuint textureID; glGenTextures(1, &textureID); glBindTexture(GL_TEXTURE_2D, textureID);
+        GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
+        GLenum internal = (nrChannels == 4) ? GL_RGBA16F : GL_RGB16F;
+        // Upload floating-point HDR data
+        glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, GL_FLOAT, dataf);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        stbi_image_free(dataf);
+        return textureID;
+    }
+
     unsigned char* data = stbi_load(path, &width, &height, &nrChannels, 0);
     if (!data) { std::cerr << "Failed to load texture: " << path << std::endl; return 0; }
     GLuint textureID; glGenTextures(1, &textureID); glBindTexture(GL_TEXTURE_2D, textureID);
@@ -279,6 +344,16 @@ GLuint Engine::loadTexture(const char* path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     stbi_image_free(data);
     return textureID;
+}
+
+bool Engine::panorama(const std::string &path) {
+    if (panoramaTexture_) { glDeleteTextures(1, &panoramaTexture_); panoramaTexture_ = 0; }
+    panoramaTexture_ = loadTexture(path.c_str());
+    if (!panoramaTexture_) {
+        std::cerr << "Failed to load panorama: " << path << std::endl;
+        return false;
+    }
+    return true;
 }
 
 // Input callbacks

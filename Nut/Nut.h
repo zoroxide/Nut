@@ -33,6 +33,11 @@ private:
     GLuint vao_, vbo_, ebo_;
     size_t indexCount_;
     GLuint grassTexture_;
+    GLuint panoramaTexture_;
+
+    // Sky renderer
+    GLuint skyShader_;
+    GLuint skyVAO_, skyVBO_;
 
     // Camera / movement
     glm::vec3 cameraPos_;
@@ -57,6 +62,11 @@ private:
 
     // Instance pointer for static callbacks
     static Engine* s_instance_;
+
+    // Public API: load a panorama image to be used for the sky
+public:
+    // Load a panorama (equirectangular) image to be used as the sky. Returns true on success.
+    bool panorama(const std::string &path);
 
     // Internal helpers (defined in engine implementation)
     std::string loadFile(const char* path);
