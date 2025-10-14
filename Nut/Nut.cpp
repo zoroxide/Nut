@@ -1,4 +1,5 @@
 #include "Nut.h"
+#include "gui/gui.h"
 
 // STB Image
 #define STB_IMAGE_IMPLEMENTATION
@@ -32,6 +33,17 @@ Engine::Engine()
 {
     std::fill(std::begin(keys_), std::end(keys_), false);
     s_instance_ = this;
+
+    // Defaults for configurable constants and paths
+    terrainSize_ = 512;
+    terrainScale_ = 1.0f;
+    heightScale_ = 6.0f;
+    textureTile_ = 22.0f;
+    panoramaPath_.clear();
+    terrainTexturePath_.clear();
+
+    // Create GUI manager (will be initialized after window/context creation)
+    // gui_ = new GUI(this);
 }
 
 Engine::~Engine() {
@@ -46,6 +58,8 @@ Engine::~Engine() {
     if (skyVBO_) glDeleteBuffers(1, &skyVBO_);
     if (skyVAO_) glDeleteVertexArrays(1, &skyVAO_);
     if (window_) glfwTerminate();
+
+    // if (gui_) { delete gui_; gui_ = nullptr; }
 }
 
 bool Engine::init(bool fullscreen) {
@@ -113,6 +127,9 @@ bool Engine::init(bool fullscreen) {
 
     buildTerrainMesh(); // helper builds terrain and calls
     uploadMeshToGPU();  // helper uploads mesh to GPU
+
+    // Initialize GUI after the OpenGL context is created
+    // if (gui_) gui_->init(window_);
 
     return true;
 }
@@ -301,36 +318,32 @@ float Engine::fbm(float x, float y) {
 }
 
 float Engine::getTerrainHeight(float wx, float wz) {
-    // Convert world coords to terrain local coords
-    float half = (TERRAIN_SIZE - 1) * 0.5f * TERRAIN_SCALE;
-
-    // Scale down for noise function
-    float x = (wx + half) / TERRAIN_SCALE;
-    float z = (wz + half) / TERRAIN_SCALE;
-
-    // Return height from fbm
-    return fbm(x * 0.06f, z * 0.06f) * HEIGHT_SCALE;
+    // Convert world coords to terrain local coords using runtime-configurable values
+    float half = (terrainSize_ - 1) * 0.5f * terrainScale_;
+    float x = (wx + half) / terrainScale_;
+    float z = (wz + half) / terrainScale_;
+    return fbm(x * 0.06f, z * 0.06f) * heightScale_;
 }
 
 void Engine::buildTerrainMesh() {
     // Build terrain mesh (vertices, normals, uvs, indices)
     std::vector<Vertex> vertices; std::vector<GLuint> indices;
 
-    // number of vertices along one side
-    int N = TERRAIN_SIZE; float half = (N - 1) * 0.5f * TERRAIN_SCALE;
+    // number of vertices along one side (runtime-configurable)
+    int N = terrainSize_; float half = (N - 1) * 0.5f * terrainScale_;
 
     // Generate heights using fbm
     std::vector<std::vector<float>> heights(N, std::vector<float>(N));
 
     // Fill heights
-    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) heights[z][x] = fbm(x * 0.06f, z * 0.06f) * HEIGHT_SCALE;
+    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) heights[z][x] = fbm(x * 0.06f, z * 0.06f) * heightScale_;
 
     // Generate vertices
     vertices.resize(N * N);
     for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
         Vertex &V = vertices[z * N + x];
-        V.pos = glm::vec3(x * TERRAIN_SCALE - half, heights[z][x], z * TERRAIN_SCALE - half);
-        V.uv  = glm::vec2((float)x / (N - 1) * TEXTURE_TILE, (float)z / (N - 1) * TEXTURE_TILE);
+        V.pos = glm::vec3(x * terrainScale_ - half, heights[z][x], z * terrainScale_ - half);
+        V.uv  = glm::vec2((float)x / (N - 1) * textureTile_, (float)z / (N - 1) * textureTile_);
     }
 
     // Generate indices (two triangles per quad)
@@ -491,3 +504,23 @@ void Engine::updateMovement(float dt) {
         cameraPos_.y = terrainY + eyeHeight;
     }
 }
+
+// ----------------- Runtime config API -----------------
+void Engine::regenerateTerrain() {
+    buildTerrainMesh();
+    uploadMeshToGPU();
+}
+
+int Engine::getTerrainSize() const { return terrainSize_; }
+void Engine::setTerrainSize(int v) { terrainSize_ = v; }
+float Engine::getTerrainScale() const { return terrainScale_; }
+void Engine::setTerrainScale(float v) { terrainScale_ = v; }
+float Engine::getHeightScale() const { return heightScale_; }
+void Engine::setHeightScale(float v) { heightScale_ = v; }
+float Engine::getTextureTile() const { return textureTile_; }
+void Engine::setTextureTile(float v) { textureTile_ = v; }
+
+const std::string& Engine::getPanoramaPath() const { return panoramaPath_; }
+void Engine::setPanoramaPath(const std::string &p) { panoramaPath_ = p; }
+const std::string& Engine::getTerrainTexturePath() const { return terrainTexturePath_; }
+void Engine::setTerrainTexturePath(const std::string &p) { terrainTexturePath_ = p; }

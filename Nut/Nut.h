@@ -6,6 +6,9 @@
 #include <string>
 #include <chrono>
 
+// forward-declare GUI class (defined in Nut/gui)
+class GUI;
+
 using Clock = std::chrono::high_resolution_clock;
 
 class Engine {
@@ -81,10 +84,42 @@ private:
     // Instance pointer for static callbacks
     static Engine* s_instance_;
 
+    // GUI manager
+    class GUI; // forward
+    GUI* gui_;
+
+    // Configurable constants (moved from macros to members so we can change them at runtime)
+    int terrainSize_;
+    float terrainScale_;
+    float heightScale_;
+    float textureTile_;
+
+    // Last-used file paths (for UI / serialization)
+    std::string panoramaPath_;
+    std::string terrainTexturePath_;
+
 
 public: // Public API
     // Load a panorama (equirectangular) image to be used as the sky. Returns true on success.
     bool panorama(const std::string &path);
+
+    // Regenerate terrain mesh with current constants
+    void regenerateTerrain();
+
+    // Getters / setters for configurable constants and file paths
+    int getTerrainSize() const;
+    void setTerrainSize(int v);
+    float getTerrainScale() const;
+    void setTerrainScale(float v);
+    float getHeightScale() const;
+    void setHeightScale(float v);
+    float getTextureTile() const;
+    void setTextureTile(float v);
+
+    const std::string& getPanoramaPath() const;
+    void setPanoramaPath(const std::string &p);
+    const std::string& getTerrainTexturePath() const;
+    void setTerrainTexturePath(const std::string &p);
 
     // Internal helpers (defined in engine implementation)
     std::string loadFile(const char* path);
