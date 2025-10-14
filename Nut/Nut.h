@@ -53,18 +53,38 @@ private:
     Clock::time_point lastFrame_;
     float deltaTime_;
 
+    // constants
+    #define TERRAIN_SIZE 512
+    #define TERRAIN_SCALE 1.0f
+
+    #define HEIGHT_SCALE 6.0f
+
+    #define TEXTURE_TILE 22.0f
+
+    #define NOISE_SCALE 0.1f
+    #define NOISE_OCTAVES 6
+    #define NOISE_PERSISTENCE 0.5f
+    #define NOISE_LACUNARITY 2.0f
+
+    #define JUMP_VELOCITY 7.0f
+
+    #define GRAVITY 18.0f
+
+    #define SPRINT_MULTIPLIER 1.9f
+
     // Input
     bool keys_[1024];
     bool jumping_;
     float jumpVel_;
 
+    // VSync state
     bool vsyncEnabled_;
 
     // Instance pointer for static callbacks
     static Engine* s_instance_;
 
-    // Public API: load a panorama image to be used for the sky
-public:
+
+public: // Public API
     // Load a panorama (equirectangular) image to be used as the sky. Returns true on success.
     bool panorama(const std::string &path);
 

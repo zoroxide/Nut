@@ -16,12 +16,7 @@
 #include <fstream>
 #include <sstream>
 #include <cmath>
-
-// Settings (kept as constants)
-const int TERRAIN_SIZE = 256;
-const float TERRAIN_SCALE = 1.0f;
-const float HEIGHT_SCALE = 6.0f;
-const float TEXTURE_TILE = 22.0f;
+#include <algorithm>
 
 // Vertex struct
 struct Vertex { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv; };
@@ -54,22 +49,30 @@ Engine::~Engine() {
 }
 
 bool Engine::init(bool fullscreen) {
+    // glfw init
     if (!glfwInit()) return false;
+
+    // glfw window hints
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
+    // Create window
     GLFWmonitor* monitor = nullptr;
     int SCR_W = 1280, SCR_H = 720;
+
+    // Fullscreen setup
     if (fullscreen) {
         monitor = glfwGetPrimaryMonitor();
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
         SCR_W = mode->width; SCR_H = mode->height;
     }
 
+    // Create window
     window_ = glfwCreateWindow(SCR_W, SCR_H, "Procedural Terrain (Engine)", monitor, nullptr);
     if (!window_) { glfwTerminate(); return false; }
 
+    // GLEW + GL context
     glfwMakeContextCurrent(window_);
     glfwSwapInterval(vsyncEnabled_ ? 1 : 0);
     glewExperimental = GL_TRUE;
@@ -84,17 +87,20 @@ bool Engine::init(bool fullscreen) {
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
 
-    // Resources
+    // Resources Loading(shaders, terrain mesh, etc)
     shaderProgram_ = createProgram("Nut/shaders/vertex.glsl", "Nut/shaders/fragment.glsl");
 
     // Create sky shader and full-screen triangle VAO
     skyShader_ = createProgram("Nut/shaders/sky_vert.glsl", "Nut/shaders/sky_frag.glsl");
     {
+        // Full-screen triangle setup
         float skyVerts[] = {
             -1.0f, -1.0f,
              3.0f, -1.0f,
             -1.0f,  3.0f
         };
+
+        // Setup sky VAO/VBO
         glGenVertexArrays(1, &skyVAO_);
         glGenBuffers(1, &skyVBO_);
         glBindVertexArray(skyVAO_);
@@ -105,8 +111,8 @@ bool Engine::init(bool fullscreen) {
         glBindVertexArray(0);
     }
 
-    buildTerrainMesh();
-    uploadMeshToGPU();
+    buildTerrainMesh(); // helper builds terrain and calls
+    uploadMeshToGPU();  // helper uploads mesh to GPU
 
     return true;
 }
@@ -122,6 +128,7 @@ void Engine::load_terrain_using_texture(const std::string &path) {
 }
 
 void Engine::mainloop() {
+    // Safety check
     if (!window_) return;
 
     // Set some uniforms that don't change often (terrain shader)
@@ -136,9 +143,11 @@ void Engine::mainloop() {
     glUseProgram(skyShader_);
     glUniform1i(glGetUniformLocation(skyShader_, "panorama"), 1);
 
+    // Get initial window size
     int SCR_W, SCR_H;
     glfwGetWindowSize(window_, &SCR_W, &SCR_H);
 
+    // Main loop
     lastFrame_ = Clock::now();
     while (!glfwWindowShouldClose(window_)) {
         // Timing
@@ -154,6 +163,7 @@ void Engine::mainloop() {
             sin(glm::radians(yaw_)) * cos(glm::radians(pitch_))
         );
 
+        // View and Projection matrices
         glm::mat4 view = glm::lookAt(cameraPos_, cameraPos_ + glm::normalize(front), glm::vec3(0,1,0));
         glm::mat4 proj = glm::perspective(glm::radians(60.0f), (float)SCR_W / (float)SCR_H, 0.1f, 500.0f);
         glm::mat4 model(1.0f);
@@ -165,23 +175,28 @@ void Engine::mainloop() {
         // --- Draw sky full-screen triangle ---
         glDisable(GL_DEPTH_TEST);
 
+        // Inverse matrices
         glm::mat4 invProj = glm::inverse(proj);
         glm::mat4 invView = glm::inverse(view);
 
+        // Draw sky
         glUseProgram(skyShader_);
         glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invProj"), 1, GL_FALSE, glm::value_ptr(invProj));
         glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invView"), 1, GL_FALSE, glm::value_ptr(invView));
         glUniform1i(glGetUniformLocation(skyShader_, "hasPanorama"), panoramaTexture_ ? 1 : 0);
 
+        // Bind panorama texture if available
         if (panoramaTexture_) {
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, panoramaTexture_);
         }
 
+        // Draw full-screen triangle
         glBindVertexArray(skyVAO_);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glBindVertexArray(0);
 
+        // --- Re-enable depth test for terrain ---
         glEnable(GL_DEPTH_TEST);
 
         // --- Then draw terrain ---
@@ -190,11 +205,13 @@ void Engine::mainloop() {
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "model"), 1, GL_FALSE, glm::value_ptr(model));
         glUniform3fv(glGetUniformLocation(shaderProgram_, "viewPos"), 1, glm::value_ptr(cameraPos_));
 
+        // Bind grass texture
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, grassTexture_);
         glBindVertexArray(vao_);
         glDrawElements(GL_TRIANGLES, (GLsizei)indexCount_, GL_UNSIGNED_INT, 0);
 
+        // Swap buffers and poll events
         glfwSwapBuffers(window_);
         glfwPollEvents();
     }
@@ -209,30 +226,67 @@ std::string Engine::loadFile(const char* path) {
 }
 
 GLuint Engine::compileShaderFromFile(const char* path, GLenum type) {
+    /* load resources */
+
+    // load file contents
     std::string src = loadFile(path);
+
+    // safety check
+    if(src.empty()) return 0;
+
+    /* Compile */
+
+    // convert to c-string
     const char* csrc = src.c_str();
+
+    // create shader
     GLuint sh = glCreateShader(type);
+
+    // gl calls for loading
     glShaderSource(sh, 1, &csrc, nullptr);
+
+    // gl calls for compiling
     glCompileShader(sh);
+
+    // Check errors
     GLint ok; glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+
+    // If error, print log
     if(!ok) { char buf[4096]; glGetShaderInfoLog(sh, 4096, nullptr, buf); std::cerr << "Shader compile error (" << path << "):\n" << buf << std::endl; }
+    
+    // return compiled shader
     return sh;
 }
 
 GLuint Engine::createProgram(const char* vsPath, const char* fsPath) {
-    GLuint vs = compileShaderFromFile(vsPath, GL_VERTEX_SHADER);
-    GLuint fs = compileShaderFromFile(fsPath, GL_FRAGMENT_SHADER);
+    /* Compile shaders and link into a program */
+    GLuint vs = compileShaderFromFile(vsPath, GL_VERTEX_SHADER); // compile vertex shader
+    GLuint fs = compileShaderFromFile(fsPath, GL_FRAGMENT_SHADER); // compile fragment shader
+
+    if(!vs || !fs) return 0; // safety check
+
+    // link program
     GLuint prog = glCreateProgram(); glAttachShader(prog, vs); glAttachShader(prog, fs); glLinkProgram(prog);
+
+    // Check errors
     GLint ok; glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+
+    // If error, print log
     if(!ok) { char buf[4096]; glGetProgramInfoLog(prog, 4096, nullptr, buf); std::cerr << "Program link error:\n" << buf << std::endl; }
+    
+    // Cleanup shaders
     glDeleteShader(vs); glDeleteShader(fs); return prog;
 }
 
-inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
-inline float fade(float t) { return t * t * (3.0f - 2.0f * t); }
+// ---------------- Terrain generation inline helpers ----------------
+inline float lerp(float a, float b, float t) { return a + (b - a) * t; } // linear interpolation
+inline float fade(float t) { return t * t * (3.0f - 2.0f * t); }         // fade function for smoothstep
 
-int hashI(int x, int y) { int n = x + y * 57; n = (n << 13) ^ n; return (n * (n * n * 60493 + 19990303) + 1376312589) & 0x7fffffff; }
-float valueNoise(int x, int y) { return (hashI(x, y) / float(0x7fffffff)) * 2.0f - 1.0f; }
+int hashI(int x, int y) { int n = x + y * 57; n = (n << 13) ^ n; return (n * (n * n * 60493 + 19990303) + 1376312589) & 0x7fffffff; } // integer hash
+
+float valueNoise(int x, int y) { return (hashI(x, y) / float(0x7fffffff)) * 2.0f - 1.0f; } // value noise in [-1,1]
+
+// 2D smooth noise
 float smoothNoise(float x, float y) {
     int xf = (int)floor(x); int yf = (int)floor(y);
     float xf_frac = x - xf; float yf_frac = y - yf;
@@ -247,18 +301,31 @@ float Engine::fbm(float x, float y) {
 }
 
 float Engine::getTerrainHeight(float wx, float wz) {
+    // Convert world coords to terrain local coords
     float half = (TERRAIN_SIZE - 1) * 0.5f * TERRAIN_SCALE;
+
+    // Scale down for noise function
     float x = (wx + half) / TERRAIN_SCALE;
     float z = (wz + half) / TERRAIN_SCALE;
+
+    // Return height from fbm
     return fbm(x * 0.06f, z * 0.06f) * HEIGHT_SCALE;
 }
 
 void Engine::buildTerrainMesh() {
+    // Build terrain mesh (vertices, normals, uvs, indices)
     std::vector<Vertex> vertices; std::vector<GLuint> indices;
+
+    // number of vertices along one side
     int N = TERRAIN_SIZE; float half = (N - 1) * 0.5f * TERRAIN_SCALE;
+
+    // Generate heights using fbm
     std::vector<std::vector<float>> heights(N, std::vector<float>(N));
+
+    // Fill heights
     for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) heights[z][x] = fbm(x * 0.06f, z * 0.06f) * HEIGHT_SCALE;
 
+    // Generate vertices
     vertices.resize(N * N);
     for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
         Vertex &V = vertices[z * N + x];
@@ -266,6 +333,7 @@ void Engine::buildTerrainMesh() {
         V.uv  = glm::vec2((float)x / (N - 1) * TEXTURE_TILE, (float)z / (N - 1) * TEXTURE_TILE);
     }
 
+    // Generate indices (two triangles per quad)
     for (int z = 0; z < N - 1; ++z) for (int x = 0; x < N - 1; ++x) {
         int tl = z * N + x; int tr = tl + 1; int bl = (z + 1) * N + x; int br = bl + 1;
         if (tl < 0 || tr < 0 || bl < 0 || br < 0) continue;
@@ -276,6 +344,7 @@ void Engine::buildTerrainMesh() {
         indices.push_back(tl); indices.push_back(br); indices.push_back(tr);
     }
 
+    // Compute normals (average face normals)
     std::vector<glm::vec3> normalSum(vertices.size(), glm::vec3(0.0f));
     for (size_t i = 0; i < indices.size(); i += 3) {
         unsigned int i0 = indices[i]; unsigned int i1 = indices[i + 1]; unsigned int i2 = indices[i + 2];
@@ -283,21 +352,26 @@ void Engine::buildTerrainMesh() {
         glm::vec3 normal = glm::normalize(glm::cross(p1 - p0, p2 - p0));
         normalSum[i0] += normal; normalSum[i1] += normal; normalSum[i2] += normal;
     }
+
+    // Normalize summed normals
     for (size_t i = 0; i < vertices.size(); ++i) vertices[i].normal = glm::normalize(normalSum[i]);
 
-    // Upload to member buffers (interleave here)
+    // TODO: Upload to member buffers (interleave here)
     // Cleanup old
     if (vao_) { glDeleteBuffers(1, &vbo_); glDeleteBuffers(1, &ebo_); glDeleteVertexArrays(1, &vao_); }
     glGenVertexArrays(1, &vao_); glGenBuffers(1, &vbo_); glGenBuffers(1, &ebo_);
     glBindVertexArray(vao_);
 
+    // Interleave data
     std::vector<float> inter; inter.reserve(vertices.size() * 8);
     for (auto &v : vertices) inter.insert(inter.end(), {v.pos.x, v.pos.y, v.pos.z, v.normal.x, v.normal.y, v.normal.z, v.uv.x, v.uv.y});
 
+    // create and upload buffers
     glBindBuffer(GL_ARRAY_BUFFER, vbo_); glBufferData(GL_ARRAY_BUFFER, inter.size() * sizeof(float), inter.data(), GL_STATIC_DRAW);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_); glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
     indexCount_ = indices.size();
 
+    // vertex attributes
     GLsizei stride = 8 * sizeof(float);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0); glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
@@ -306,21 +380,30 @@ void Engine::buildTerrainMesh() {
 }
 
 void Engine::uploadMeshToGPU() {
-    // Mesh upload is integrated into buildTerrainMesh for simplicity in this refactor
+    // Mesh upload is integrated into buildTerrainMesh for simplicity (in this refactor)
 }
 
 GLuint Engine::loadTexture(const char* path) {
+    // Load texture using stb_image
+    if (!path) return 0;
     int width = 0, height = 0, nrChannels = 0;
+
     // For panoramas, flipping vertically can be harmful; but keep user behavior consistent
     stbi_set_flip_vertically_on_load(true);
 
-    // Detect HDR images and load accordingly
+    // Detect HDR images and load accordingly (for panoramas)
     if (stbi_is_hdr(path)) {
+
+        // load as floating point
         float* dataf = stbi_loadf(path, &width, &height, &nrChannels, 0);
+        // safety check
         if (!dataf) { std::cerr << "Failed to load HDR texture: " << path << std::endl; return 0; }
+
+        // Create OpenGL texture
         GLuint textureID; glGenTextures(1, &textureID); glBindTexture(GL_TEXTURE_2D, textureID);
         GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
         GLenum internal = (nrChannels == 4) ? GL_RGBA16F : GL_RGB16F;
+
         // Upload floating-point HDR data
         glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, GL_FLOAT, dataf);
         glGenerateMipmap(GL_TEXTURE_2D);
@@ -329,13 +412,21 @@ GLuint Engine::loadTexture(const char* path) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         stbi_image_free(dataf);
+
+        // return texture ID
         return textureID;
     }
 
+    // Load as standard 8-bit image (only 8 bit images can be used as terrain texture)
     unsigned char* data = stbi_load(path, &width, &height, &nrChannels, 0);
+    // safety check
     if (!data) { std::cerr << "Failed to load texture: " << path << std::endl; return 0; }
+
+    // Create OpenGL texture
     GLuint textureID; glGenTextures(1, &textureID); glBindTexture(GL_TEXTURE_2D, textureID);
     GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
+
+    // Upload 8-bit data
     glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
     glGenerateMipmap(GL_TEXTURE_2D);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -343,11 +434,16 @@ GLuint Engine::loadTexture(const char* path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     stbi_image_free(data);
+
+    // return texture ID
     return textureID;
 }
 
 bool Engine::panorama(const std::string &path) {
+    // Load panorama texture (can be HDR or standard)
     if (panoramaTexture_) { glDeleteTextures(1, &panoramaTexture_); panoramaTexture_ = 0; }
+    if (path.empty()) return true; // no panorama is valid
+    // Load texture
     panoramaTexture_ = loadTexture(path.c_str());
     if (!panoramaTexture_) {
         std::cerr << "Failed to load panorama: " << path << std::endl;
@@ -367,17 +463,26 @@ void Engine::cursorPosCallback(double xpos, double ypos) {
 }
 
 void Engine::keyCallback(int key, int, int action, int) {
-    if (key >= 0 && key < 1024) keys_[key] = (action == GLFW_PRESS || action == GLFW_REPEAT);
-    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) glfwSetWindowShouldClose(window_, true);
-    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS && !jumping_) { jumping_ = true; jumpVel_ = 7.0f; }
+    if (key >= 0 && key < 1024) keys_[key] = (action == GLFW_PRESS || action == GLFW_REPEAT); // keep track of key states
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) glfwSetWindowShouldClose(window_, true); // close on escape
+    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS && !jumping_) { jumping_ = true; jumpVel_ = JUMP_VELOCITY; } // ideal 7 for normal jump
 }
 
 void Engine::updateMovement(float dt) {
+    // Update camera position based on key states
+    // WASD for movement, SPACE for jump (handled in key callback)
+    // Simple gravity and jumping mechanics
+    // Camera stays at terrain height + eye height when not jumping
+
     glm::vec3 front = glm::normalize(glm::vec3(cos(glm::radians(yaw_)), 0.0f, sin(glm::radians(yaw_))));
     glm::vec3 right = glm::normalize(glm::cross(front, glm::vec3(0,1,0)));
-    float sp = moveSpeed_ * dt; if (keys_[GLFW_KEY_LEFT_SHIFT]) sp *= 1.9f;
+
+    // sprinting
+    float sp = moveSpeed_ * dt; if (keys_[GLFW_KEY_LEFT_SHIFT]) sp *= SPRINT_MULTIPLIER; // sprint multiplier (ideal 1.9 for normal sprint)
     glm::vec3 move(0.0f); if (keys_[GLFW_KEY_W]) move += front * sp; if (keys_[GLFW_KEY_S]) move -= front * sp; if (keys_[GLFW_KEY_A]) move -= right * sp; if (keys_[GLFW_KEY_D]) move += right * sp;
     cameraPos_ += move;
+
+    // Terrain collision and gravity
     float terrainY = getTerrainHeight(cameraPos_.x, cameraPos_.z); float eyeHeight = 1.7f;
     if (jumping_) {
         cameraPos_.y += jumpVel_ * dt; jumpVel_ -= 18.0f * dt;
