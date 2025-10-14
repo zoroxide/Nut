@@ -56,19 +56,17 @@ private:
     // constants
     #define TERRAIN_SIZE 512
     #define TERRAIN_SCALE 1.0f
-
     #define HEIGHT_SCALE 6.0f
-
     #define TEXTURE_TILE 22.0f
 
-    #define NOISE_SCALE 0.1f
-    #define NOISE_OCTAVES 6
-    #define NOISE_PERSISTENCE 0.5f
-    #define NOISE_LACUNARITY 2.0f
+    // #define NOISE_SCALE 0.1f
+    // #define NOISE_OCTAVES 6
+    // #define NOISE_PERSISTENCE 0.5f
+    // #define NOISE_LACUNARITY 2.0f
 
     #define JUMP_VELOCITY 7.0f
 
-    #define GRAVITY 18.0f
+    // #define GRAVITY 18.0f
 
     #define SPRINT_MULTIPLIER 1.9f
 
