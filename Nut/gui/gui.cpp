@@ -2,20 +2,20 @@
 #include "../Nut.h"
 
 // ImGui includes (user must have ImGui and the backends available)
-#include "../../external/imgui/imgui.h"
-#include "../../external/imgui/backends/imgui_impl_glfw.h"
-#include "../../external/imgui/backends/imgui_impl_opengl3.h"
+#include "../libs/imgui/imgui.h"
+// #include "../libs/imgui/backends/imgui_impl_glfw.h"
+// #include "../libs/imgui/backends/imgui_impl_opengl3.h"
 
 #include <GLFW/glfw3.h>
-#include <iostream>
+// #include <iostream>
 #include <cstring>
 
 GUI::GUI(Engine* engine) : engine_(engine), window_(nullptr), initialized_(false) {}
 
 GUI::~GUI() {
     if (initialized_) {
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
+        // ImGui_ImplOpenGL3_Shutdown();
+        // ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
     }
 }
@@ -33,12 +33,12 @@ bool GUI::init(GLFWwindow* window) {
     ImGui::StyleColorsDark();
 
     // Backends
-    if (!ImGui_ImplGlfw_InitForOpenGL(window_, true)) {
-        std::cerr << "Failed to init ImGui GLFW backend" << std::endl; return false;
-    }
-    if (!ImGui_ImplOpenGL3_Init("#version 330")) {
-        std::cerr << "Failed to init ImGui OpenGL3 backend" << std::endl; return false;
-    }
+    // if (!ImGui_ImplGlfw_InitForOpenGL(window_, true)) {
+    //     std::cerr << "Failed to init ImGui GLFW backend" << std::endl; return false;
+    // }
+    // if (!ImGui_ImplOpenGL3_Init("#version 330")) {
+    //     std::cerr << "Failed to init ImGui OpenGL3 backend" << std::endl; return false;
+    // }
 
     initialized_ = true;
     return true;
@@ -47,8 +47,8 @@ bool GUI::init(GLFWwindow* window) {
 void GUI::render() {
     if (!initialized_) return;
 
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
+    // ImGui_ImplOpenGL3_NewFrame();
+    // ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
     ImGui::Begin("Engine Controls");
@@ -109,5 +109,5 @@ void GUI::render() {
     ImGui::End();
 
     ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    // ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
