@@ -2,9 +2,9 @@
 #include "../Nut.h"
 
 // ImGui includes (user must have ImGui and the backends available)
-#include <imgui.h>
-#include <imgui_impl_glfw.h>
-#include <imgui_impl_opengl3.h>
+#include "../../external/imgui/imgui.h"
+#include "../../external/imgui/backends/imgui_impl_glfw.h"
+#include "../../external/imgui/backends/imgui_impl_opengl3.h"
 
 #include <GLFW/glfw3.h>
 #include <iostream>
@@ -91,6 +91,16 @@ void GUI::render() {
     if (ImGui::InputFloat("Height Scale", &hs)) engine_->setHeightScale(hs);
     float tt = engine_->getTextureTile();
     if (ImGui::InputFloat("Texture Tile", &tt)) engine_->setTextureTile(tt);
+
+    // Cloud controls
+    bool ce = engine_->getCloudEnabled();
+    if (ImGui::Checkbox("Enable Clouds", &ce)) engine_->setCloudEnabled(ce);
+    float cs = engine_->getCloudSpeed();
+    if (ImGui::SliderFloat("Cloud Speed", &cs, 0.0f, 0.5f)) engine_->setCloudSpeed(cs);
+    float csc = engine_->getCloudScale();
+    if (ImGui::SliderFloat("Cloud Scale", &csc, 0.2f, 4.0f)) engine_->setCloudScale(csc);
+    float cop = engine_->getCloudOpacity();
+    if (ImGui::SliderFloat("Cloud Opacity", &cop, 0.0f, 1.0f)) engine_->setCloudOpacity(cop);
 
     if (ImGui::Button("Regenerate Terrain")) {
         engine_->regenerateTerrain();

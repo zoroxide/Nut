@@ -97,6 +97,12 @@ private:
     // Last-used file paths (for UI / serialization)
     std::string panoramaPath_;
     std::string terrainTexturePath_;
+    
+    // Cloud layer settings
+    bool cloudEnabled_;
+    float cloudSpeed_;
+    float cloudScale_;
+    float cloudOpacity_;
 
 
 public: // Public API
@@ -116,10 +122,21 @@ public: // Public API
     float getTextureTile() const;
     void setTextureTile(float v);
 
+    // File path accessors
     const std::string& getPanoramaPath() const;
     void setPanoramaPath(const std::string &p);
     const std::string& getTerrainTexturePath() const;
     void setTerrainTexturePath(const std::string &p);
+
+    // Cloud accessors
+    bool getCloudEnabled() const;
+    void setCloudEnabled(bool v);
+    float getCloudSpeed() const;
+    void setCloudSpeed(float v);
+    float getCloudScale() const;
+    void setCloudScale(float v);
+    float getCloudOpacity() const;
+    void setCloudOpacity(float v);
 
     // Internal helpers (defined in engine implementation)
     std::string loadFile(const char* path);

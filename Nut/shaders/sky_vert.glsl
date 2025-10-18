@@ -13,9 +13,10 @@ void main() {
     vec4 eye = invProj * clip;
     eye /= eye.w;
 
-    // Make it a direction in view space, then transform to world space
-    vec4 worldDir4 = invView * vec4(eye.xyz, 0.0);
-    vDir = normalize(worldDir4.xyz);
+    // Use only the rotational part of the inverse view to avoid camera translation
+    // affecting the sky (no parallax). mat3(invView) extracts rotation.
+    vec3 worldDir = mat3(invView) * eye.xyz;
+    vDir = normalize(worldDir);
 
     // we still must output a clip position
     gl_Position = vec4(aPos, 0.0, 1.0);

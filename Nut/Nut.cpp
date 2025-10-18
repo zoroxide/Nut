@@ -41,6 +41,11 @@ Engine::Engine()
     textureTile_ = 22.0f;
     panoramaPath_.clear();
     terrainTexturePath_.clear();
+    // Cloud defaults
+    cloudEnabled_ = true;
+    cloudSpeed_ = 0.02f;
+    cloudScale_ = 1.0f;
+    cloudOpacity_ = 0.55f;
 
     // Create GUI manager (will be initialized after window/context creation)
     // gui_ = new GUI(this);
@@ -159,6 +164,11 @@ void Engine::mainloop() {
     // sky shader texture unit binding (panorama will be bound to unit 1 at render time)
     glUseProgram(skyShader_);
     glUniform1i(glGetUniformLocation(skyShader_, "panorama"), 1);
+    // set initial cloud uniforms (time will be updated per-frame)
+    glUniform1i(glGetUniformLocation(skyShader_, "cloudEnabled"), cloudEnabled_ ? 1 : 0);
+    glUniform1f(glGetUniformLocation(skyShader_, "cloudSpeed"), cloudSpeed_);
+    glUniform1f(glGetUniformLocation(skyShader_, "cloudScale"), cloudScale_);
+    glUniform1f(glGetUniformLocation(skyShader_, "cloudOpacity"), cloudOpacity_);
 
     // Get initial window size
     int SCR_W, SCR_H;
@@ -194,13 +204,26 @@ void Engine::mainloop() {
 
         // Inverse matrices
         glm::mat4 invProj = glm::inverse(proj);
-        glm::mat4 invView = glm::inverse(view);
 
         // Draw sky
         glUseProgram(skyShader_);
         glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invProj"), 1, GL_FALSE, glm::value_ptr(invProj));
-        glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invView"), 1, GL_FALSE, glm::value_ptr(invView));
-        glUniform1i(glGetUniformLocation(skyShader_, "hasPanorama"), panoramaTexture_ ? 1 : 0);
+
+    // Provide full inverse view matrix; the vertex shader uses mat3(invView) so
+    // translation is ignored and the sky remains fixed (no parallax from camera position).
+    glm::mat4 invView = glm::inverse(view);
+    glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invView"), 1, GL_FALSE, glm::value_ptr(invView));
+    glUniform1i(glGetUniformLocation(skyShader_, "hasPanorama"), panoramaTexture_ ? 1 : 0);
+    // update animated uniforms
+    float t = (float)std::chrono::duration<double>(Clock::now() - lastFrame_).count();
+    // Use running time since program start for smoother animation
+    static double startTime = std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
+    float runTime = (float)(std::chrono::duration<double>(Clock::now().time_since_epoch()).count() - startTime);
+    glUniform1f(glGetUniformLocation(skyShader_, "time"), runTime);
+    glUniform1i(glGetUniformLocation(skyShader_, "cloudEnabled"), cloudEnabled_ ? 1 : 0);
+    glUniform1f(glGetUniformLocation(skyShader_, "cloudSpeed"), cloudSpeed_);
+    glUniform1f(glGetUniformLocation(skyShader_, "cloudScale"), cloudScale_);
+    glUniform1f(glGetUniformLocation(skyShader_, "cloudOpacity"), cloudOpacity_);
 
         // Bind panorama texture if available
         if (panoramaTexture_) {
@@ -408,6 +431,8 @@ GLuint Engine::loadTexture(const char* path) {
     if (stbi_is_hdr(path)) {
 
         // load as floating point
+        // Do not flip HDR panoramas vertically when loading - equirectangular expects native orientation
+        stbi_set_flip_vertically_on_load(false);
         float* dataf = stbi_loadf(path, &width, &height, &nrChannels, 0);
         // safety check
         if (!dataf) { std::cerr << "Failed to load HDR texture: " << path << std::endl; return 0; }
@@ -420,8 +445,9 @@ GLuint Engine::loadTexture(const char* path) {
         // Upload floating-point HDR data
         glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, GL_FLOAT, dataf);
         glGenerateMipmap(GL_TEXTURE_2D);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    // For panoramas we prefer clamp to edge to avoid seams at the texture borders
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         stbi_image_free(dataf);
@@ -431,6 +457,8 @@ GLuint Engine::loadTexture(const char* path) {
     }
 
     // Load as standard 8-bit image (only 8 bit images can be used as terrain texture)
+    // Default: don't flip LDR images by default for panoramas; caller can request flip if needed
+    stbi_set_flip_vertically_on_load(false);
     unsigned char* data = stbi_load(path, &width, &height, &nrChannels, 0);
     // safety check
     if (!data) { std::cerr << "Failed to load texture: " << path << std::endl; return 0; }
@@ -442,6 +470,7 @@ GLuint Engine::loadTexture(const char* path) {
     // Upload 8-bit data
     glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
     glGenerateMipmap(GL_TEXTURE_2D);
+    // Use repeat for tileable textures by default; caller (panorama) may change wrap to CLAMP_TO_EDGE
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -462,6 +491,10 @@ bool Engine::panorama(const std::string &path) {
         std::cerr << "Failed to load panorama: " << path << std::endl;
         return false;
     }
+    // Ensure the panorama is clamped to edge (prevents seams at the texture borders)
+    glBindTexture(GL_TEXTURE_2D, panoramaTexture_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     return true;
 }
 
@@ -524,3 +557,13 @@ const std::string& Engine::getPanoramaPath() const { return panoramaPath_; }
 void Engine::setPanoramaPath(const std::string &p) { panoramaPath_ = p; }
 const std::string& Engine::getTerrainTexturePath() const { return terrainTexturePath_; }
 void Engine::setTerrainTexturePath(const std::string &p) { terrainTexturePath_ = p; }
+
+// Cloud accessors
+bool Engine::getCloudEnabled() const { return cloudEnabled_; }
+void Engine::setCloudEnabled(bool v) { cloudEnabled_ = v; }
+float Engine::getCloudSpeed() const { return cloudSpeed_; }
+void Engine::setCloudSpeed(float v) { cloudSpeed_ = v; }
+float Engine::getCloudScale() const { return cloudScale_; }
+void Engine::setCloudScale(float v) { cloudScale_ = v; }
+float Engine::getCloudOpacity() const { return cloudOpacity_; }
+void Engine::setCloudOpacity(float v) { cloudOpacity_ = v; }
