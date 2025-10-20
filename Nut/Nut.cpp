@@ -252,11 +252,14 @@ void Engine::mainloop() {
     glm::mat4 invView = glm::inverse(view);
     glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invView"), 1, GL_FALSE, glm::value_ptr(invView));
     glUniform1i(glGetUniformLocation(skyShader_, "hasPanorama"), panoramaTexture_ ? 1 : 0);
+
     // update animated uniforms
-    float t = (float)std::chrono::duration<double>(Clock::now() - lastFrame_).count();
+    // float t = (float)std::chrono::duration<double>(Clock::now() - lastFrame_).count();
+
     // Use running time since program start for smoother animation
     static double startTime = std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
     float runTime = (float)(std::chrono::duration<double>(Clock::now().time_since_epoch()).count() - startTime);
+
     glUniform1f(glGetUniformLocation(skyShader_, "time"), runTime);
     glUniform1i(glGetUniformLocation(skyShader_, "cloudEnabled"), cloudEnabled_ ? 1 : 0);
     glUniform1f(glGetUniformLocation(skyShader_, "cloudSpeed"), cloudSpeed_);
