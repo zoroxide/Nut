@@ -144,9 +144,47 @@ void Engine::vsync(bool enabled) {
     if (window_) glfwSwapInterval(enabled ? 1 : 0);
 }
 
-void Engine::load_terrain_using_texture(const std::string &path) {
-    grassTexture_ = loadTexture(path.c_str());
+void Engine::load_terrain_using_texture(const std::string &texturePath, const std::string &objPath) {
+    grassTexture_ = loadTexture(texturePath.c_str());
     if (!grassTexture_) std::cerr << "Warning: grass texture failed to load\n";
+
+    if (!objPath.empty()) {
+        // Load OBJ model using Assimp
+        Assimp::Importer importer;
+        const aiScene* scene = importer.ReadFile(objPath, aiProcess_Triangulate | aiProcess_FlipUVs);
+        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+            std::cerr << "Error: Failed to load OBJ file: " << importer.GetErrorString() << "\n";
+            return;
+        }
+
+        // Process the scene (for simplicity, assume single mesh)
+        aiMesh* mesh = scene->mMeshes[0];
+        std::vector<float> vertices;
+        for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
+            vertices.push_back(mesh->mVertices[i].x);
+            vertices.push_back(mesh->mVertices[i].y);
+            vertices.push_back(mesh->mVertices[i].z);
+        }
+
+        // Generate VAO/VBO for the model
+        GLuint vao, vbo;
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+
+        // Store VAO for rendering
+        modelVAO_ = vao;
+        modelVertexCount_ = mesh->mNumVertices;
+    }
 }
 
 void Engine::mainloop() {

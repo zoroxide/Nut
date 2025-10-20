@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall
-LIBS = -lGLEW -lglfw -lGL -ldl -lpthread -lm
+LIBS = -lGLEW -lglfw -lGL -ldl -lpthread -lm -lassimp
 SRC = main.cpp Nut/Nut.cpp
 OUT_DIR = build
 TARGET = program

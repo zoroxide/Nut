@@ -5,6 +5,9 @@
 #include <glm/glm.hpp>
 #include <string>
 #include <chrono>
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
 
 // forward-declare GUI class (defined in Nut/gui)
 class GUI;
@@ -20,8 +23,8 @@ public:
     // If fullscreen is true, a fullscreen window is created.
     bool init(bool fullscreen = true);
 
-    // Load terrain texture from path and bind it for rendering.
-    void load_terrain_using_texture(const std::string &path);
+    // Load terrain texture and optional OBJ model from paths.
+    void load_terrain_using_texture(const std::string &texturePath, const std::string &objPath = "");
 
     // Enable or disable VSync (must be called after init or will be applied on next init)
     void vsync(bool enabled);
@@ -154,4 +157,8 @@ public: // Public API
     void cursorPosCallback(double xpos, double ypos);
     void keyCallback(int key, int scancode, int action, int mods);
     void updateMovement(float dt);
+
+    // Model data
+    GLuint modelVAO_;
+    size_t modelVertexCount_;
 };

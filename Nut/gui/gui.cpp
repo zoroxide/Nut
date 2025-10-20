@@ -1,10 +1,9 @@
 #include "gui.h"
 #include "../Nut.h"
 
-// ImGui includes (user must have ImGui and the backends available)
-#include "../../external/imgui/imgui.h"
-#include "../../external/imgui/backends/imgui_impl_glfw.h"
-#include "../../external/imgui/backends/imgui_impl_opengl3.h"
+#include "../libs/imgui/imgui.h"
+#include "../libs/imgui/backends/imgui_impl_glfw.h"
+#include "../libs/imgui/backends/imgui_impl_opengl3.h"
 
 #include <GLFW/glfw3.h>
 #include <iostream>
@@ -73,8 +72,8 @@ void GUI::render() {
     if (ImGui::InputText("Terrain Texture Path", tbuf, sizeof(tbuf))) {
         engine_->setTerrainTexturePath(std::string(tbuf));
     }
-    if (ImGui::Button("Load Terrain Texture")) {
-        engine_->load_terrain_using_texture(engine_->getTerrainTexturePath());
+    if (ImGui::Button("Load Terrain Texture and Tree")) {
+        engine_->load_terrain_using_texture(engine_->getTerrainTexturePath(), "assets/Tree1/Tree1.obj");
     }
 
     ImGui::Separator();
