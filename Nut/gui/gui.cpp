@@ -35,6 +35,7 @@ bool GUI::init(GLFWwindow* window) {
     if (!ImGui_ImplGlfw_InitForOpenGL(window_, true)) {
         std::cerr << "Failed to init ImGui GLFW backend" << std::endl; return false;
     }
+
     if (!ImGui_ImplOpenGL3_Init("#version 330")) {
         std::cerr << "Failed to init ImGui OpenGL3 backend" << std::endl; return false;
     }
@@ -56,9 +57,11 @@ void GUI::render() {
     char pbuf[512];
     std::string currentP = engine_->getPanoramaPath();
     strncpy(pbuf, currentP.c_str(), sizeof(pbuf)); pbuf[sizeof(pbuf)-1] = '\0';
+
     if (ImGui::InputText("Panorama Path", pbuf, sizeof(pbuf))) {
         engine_->setPanoramaPath(std::string(pbuf));
     }
+
     if (ImGui::Button("Load Panorama")) {
         engine_->panorama(engine_->getPanoramaPath());
     }
@@ -84,20 +87,26 @@ void GUI::render() {
         if (ts < 2) ts = 2;
         engine_->setTerrainSize(ts);
     }
+
     float sc = engine_->getTerrainScale();
     if (ImGui::InputFloat("Terrain Scale", &sc)) engine_->setTerrainScale(sc);
+
     float hs = engine_->getHeightScale();
     if (ImGui::InputFloat("Height Scale", &hs)) engine_->setHeightScale(hs);
+
     float tt = engine_->getTextureTile();
     if (ImGui::InputFloat("Texture Tile", &tt)) engine_->setTextureTile(tt);
 
     // Cloud controls
     bool ce = engine_->getCloudEnabled();
     if (ImGui::Checkbox("Enable Clouds", &ce)) engine_->setCloudEnabled(ce);
+
     float cs = engine_->getCloudSpeed();
     if (ImGui::SliderFloat("Cloud Speed", &cs, 0.0f, 0.5f)) engine_->setCloudSpeed(cs);
+
     float csc = engine_->getCloudScale();
     if (ImGui::SliderFloat("Cloud Scale", &csc, 0.2f, 4.0f)) engine_->setCloudScale(csc);
+
     float cop = engine_->getCloudOpacity();
     if (ImGui::SliderFloat("Cloud Opacity", &cop, 0.0f, 1.0f)) engine_->setCloudOpacity(cop);
 

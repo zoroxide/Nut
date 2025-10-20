@@ -144,6 +144,34 @@ void Engine::vsync(bool enabled) {
     if (window_) glfwSwapInterval(enabled ? 1 : 0);
 }
 
+/* (Getters / Setters) */
+
+// Terrain accessors
+int Engine::getTerrainSize() const { return terrainSize_; }
+void Engine::setTerrainSize(int v) { terrainSize_ = v; }
+float Engine::getTerrainScale() const { return terrainScale_; }
+void Engine::setTerrainScale(float v) { terrainScale_ = v; }
+float Engine::getHeightScale() const { return heightScale_; }
+void Engine::setHeightScale(float v) { heightScale_ = v; }
+float Engine::getTextureTile() const { return textureTile_; }
+void Engine::setTextureTile(float v) { textureTile_ = v; }
+
+// Path accessors
+const std::string& Engine::getPanoramaPath() const { return panoramaPath_; }
+void Engine::setPanoramaPath(const std::string &p) { panoramaPath_ = p; }
+const std::string& Engine::getTerrainTexturePath() const { return terrainTexturePath_; }
+void Engine::setTerrainTexturePath(const std::string &p) { terrainTexturePath_ = p; }
+
+// Cloud accessors
+bool Engine::getCloudEnabled() const { return cloudEnabled_; }
+void Engine::setCloudEnabled(bool v) { cloudEnabled_ = v; }
+float Engine::getCloudSpeed() const { return cloudSpeed_; }
+void Engine::setCloudSpeed(float v) { cloudSpeed_ = v; }
+float Engine::getCloudScale() const { return cloudScale_; }
+void Engine::setCloudScale(float v) { cloudScale_ = v; }
+float Engine::getCloudOpacity() const { return cloudOpacity_; }
+void Engine::setCloudOpacity(float v) { cloudOpacity_ = v; }
+
 void Engine::load_terrain_using_texture(const std::string &texturePath, const std::string &objPath) {
     grassTexture_ = loadTexture(texturePath.c_str());
     if (!grassTexture_) std::cerr << "Warning: grass texture failed to load\n";
@@ -247,24 +275,24 @@ void Engine::mainloop() {
         glUseProgram(skyShader_);
         glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invProj"), 1, GL_FALSE, glm::value_ptr(invProj));
 
-    // Provide full inverse view matrix; the vertex shader uses mat3(invView) so
-    // translation is ignored and the sky remains fixed (no parallax from camera position).
-    glm::mat4 invView = glm::inverse(view);
-    glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invView"), 1, GL_FALSE, glm::value_ptr(invView));
-    glUniform1i(glGetUniformLocation(skyShader_, "hasPanorama"), panoramaTexture_ ? 1 : 0);
+        // Provide full inverse view matrix; the vertex shader uses mat3(invView) so
+        // translation is ignored and the sky remains fixed (no parallax from camera position).
+        glm::mat4 invView = glm::inverse(view);
+        glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invView"), 1, GL_FALSE, glm::value_ptr(invView));
+        glUniform1i(glGetUniformLocation(skyShader_, "hasPanorama"), panoramaTexture_ ? 1 : 0);
 
-    // update animated uniforms
-    // float t = (float)std::chrono::duration<double>(Clock::now() - lastFrame_).count();
+        // update animated uniforms
+        // float t = (float)std::chrono::duration<double>(Clock::now() - lastFrame_).count();
 
-    // Use running time since program start for smoother animation
-    static double startTime = std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
-    float runTime = (float)(std::chrono::duration<double>(Clock::now().time_since_epoch()).count() - startTime);
+        // Use running time since program start for smoother animation
+        static double startTime = std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
+        float runTime = (float)(std::chrono::duration<double>(Clock::now().time_since_epoch()).count() - startTime);
 
-    glUniform1f(glGetUniformLocation(skyShader_, "time"), runTime);
-    glUniform1i(glGetUniformLocation(skyShader_, "cloudEnabled"), cloudEnabled_ ? 1 : 0);
-    glUniform1f(glGetUniformLocation(skyShader_, "cloudSpeed"), cloudSpeed_);
-    glUniform1f(glGetUniformLocation(skyShader_, "cloudScale"), cloudScale_);
-    glUniform1f(glGetUniformLocation(skyShader_, "cloudOpacity"), cloudOpacity_);
+        glUniform1f(glGetUniformLocation(skyShader_, "time"), runTime);
+        glUniform1i(glGetUniformLocation(skyShader_, "cloudEnabled"), cloudEnabled_ ? 1 : 0);
+        glUniform1f(glGetUniformLocation(skyShader_, "cloudSpeed"), cloudSpeed_);
+        glUniform1f(glGetUniformLocation(skyShader_, "cloudScale"), cloudScale_);
+        glUniform1f(glGetUniformLocation(skyShader_, "cloudOpacity"), cloudOpacity_);
 
         // Bind panorama texture if available
         if (panoramaTexture_) {
@@ -291,6 +319,9 @@ void Engine::mainloop() {
         glBindTexture(GL_TEXTURE_2D, grassTexture_);
         glBindVertexArray(vao_);
         glDrawElements(GL_TRIANGLES, (GLsizei)indexCount_, GL_UNSIGNED_INT, 0);
+
+        // Render GUI
+        gui_->render();
 
         // Swap buffers and poll events
         glfwSwapBuffers(window_);
@@ -550,10 +581,30 @@ void Engine::cursorPosCallback(double xpos, double ypos) {
 }
 
 void Engine::keyCallback(int key, int, int action, int) {
-    if (key >= 0 && key < 1024) keys_[key] = (action == GLFW_PRESS || action == GLFW_REPEAT); // keep track of key states
-    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) glfwSetWindowShouldClose(window_, true); // close on escape
-    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS && !jumping_) { jumping_ = true; jumpVel_ = JUMP_VELOCITY; } // ideal 7 for normal jump
+    if (key >= 0 && key < 1024)
+        keys_[key] = (action == GLFW_PRESS || action == GLFW_REPEAT); // key states
+
+    // ESC closes the window
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+        glfwSetWindowShouldClose(window_, true);
+
+    // SPACE for jumping
+    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS && !jumping_) {
+        jumping_ = true;
+        jumpVel_ = JUMP_VELOCITY; // ideal 7 for normal jump
+    }
+
+    // ENTER toggles mouse visibility
+    if (key == GLFW_KEY_ENTER && action == GLFW_PRESS) {
+        static bool cursorVisible = false;
+        cursorVisible = !cursorVisible;
+        if (cursorVisible)
+            glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        else
+            glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    }
 }
+
 
 void Engine::updateMovement(float dt) {
     // Update camera position based on key states
@@ -584,31 +635,3 @@ void Engine::regenerateTerrain() {
     buildTerrainMesh();
     uploadMeshToGPU();
 }
-
-/* Getters / Setters */
-
-// Terrain accessors
-int Engine::getTerrainSize() const { return terrainSize_; }
-void Engine::setTerrainSize(int v) { terrainSize_ = v; }
-float Engine::getTerrainScale() const { return terrainScale_; }
-void Engine::setTerrainScale(float v) { terrainScale_ = v; }
-float Engine::getHeightScale() const { return heightScale_; }
-void Engine::setHeightScale(float v) { heightScale_ = v; }
-float Engine::getTextureTile() const { return textureTile_; }
-void Engine::setTextureTile(float v) { textureTile_ = v; }
-
-// Path accessors
-const std::string& Engine::getPanoramaPath() const { return panoramaPath_; }
-void Engine::setPanoramaPath(const std::string &p) { panoramaPath_ = p; }
-const std::string& Engine::getTerrainTexturePath() const { return terrainTexturePath_; }
-void Engine::setTerrainTexturePath(const std::string &p) { terrainTexturePath_ = p; }
-
-// Cloud accessors
-bool Engine::getCloudEnabled() const { return cloudEnabled_; }
-void Engine::setCloudEnabled(bool v) { cloudEnabled_ = v; }
-float Engine::getCloudSpeed() const { return cloudSpeed_; }
-void Engine::setCloudSpeed(float v) { cloudSpeed_ = v; }
-float Engine::getCloudScale() const { return cloudScale_; }
-void Engine::setCloudScale(float v) { cloudScale_ = v; }
-float Engine::getCloudOpacity() const { return cloudOpacity_; }
-void Engine::setCloudOpacity(float v) { cloudOpacity_ = v; }

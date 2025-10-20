@@ -10,8 +10,8 @@ int main() {
         return -1;
     }
 
-    // Load terrain texture and tree model
-    engine.load_terrain_using_texture("assets/grass.png", "assets/Tree1/Tree1.obj");
+    // Load terrain texture
+    engine.load_terrain_using_texture("assets/grass.png");
 
     // Load panorama texture (optional)
     if (!engine.panorama("assets/qwantani_moon_noon_puresky_4k.hdr")) {

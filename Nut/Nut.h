@@ -84,6 +84,10 @@ private:
     // VSync state
     bool vsyncEnabled_;
 
+    // for locking/unlocking cursor
+    bool cursorEnabled_ = false;
+
+
     // Instance pointer for static callbacks
     static Engine* s_instance_;
 
