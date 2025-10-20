@@ -9,8 +9,8 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
-// forward-declare GUI class (defined in Nut/gui)
-class GUI;
+#include "gui/gui.h"
+#include "libs/imgui/imgui.h"
 
 using Clock = std::chrono::high_resolution_clock;
 
@@ -88,7 +88,6 @@ private:
     static Engine* s_instance_;
 
     // GUI manager
-    class GUI; // forward
     GUI* gui_;
 
     // Configurable constants (moved from macros to members so we can change them at runtime)

@@ -48,7 +48,7 @@ Engine::Engine()
     cloudOpacity_ = 0.55f;
 
     // Create GUI manager (will be initialized after window/context creation)
-    // gui_ = new GUI(this);
+    gui_ = new GUI(this);
 }
 
 Engine::~Engine() {
@@ -64,7 +64,7 @@ Engine::~Engine() {
     if (skyVAO_) glDeleteVertexArrays(1, &skyVAO_);
     if (window_) glfwTerminate();
 
-    // if (gui_) { delete gui_; gui_ = nullptr; }
+    if (gui_) { delete gui_; gui_ = nullptr; }
 }
 
 bool Engine::init(bool fullscreen) {
@@ -134,7 +134,7 @@ bool Engine::init(bool fullscreen) {
     uploadMeshToGPU();  // helper uploads mesh to GPU
 
     // Initialize GUI after the OpenGL context is created
-    // if (gui_) gui_->init(window_);
+    if (gui_) gui_->init(window_);
 
     return true;
 }
@@ -582,6 +582,9 @@ void Engine::regenerateTerrain() {
     uploadMeshToGPU();
 }
 
+/* Getters / Setters */
+
+// Terrain accessors
 int Engine::getTerrainSize() const { return terrainSize_; }
 void Engine::setTerrainSize(int v) { terrainSize_ = v; }
 float Engine::getTerrainScale() const { return terrainScale_; }
@@ -591,6 +594,7 @@ void Engine::setHeightScale(float v) { heightScale_ = v; }
 float Engine::getTextureTile() const { return textureTile_; }
 void Engine::setTextureTile(float v) { textureTile_ = v; }
 
+// Path accessors
 const std::string& Engine::getPanoramaPath() const { return panoramaPath_; }
 void Engine::setPanoramaPath(const std::string &p) { panoramaPath_ = p; }
 const std::string& Engine::getTerrainTexturePath() const { return terrainTexturePath_; }
