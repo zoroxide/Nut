@@ -41,4 +41,5 @@ cmake-build-*/
 *.mod
 *.pch
 *.sbr
-
+*.ini
+*.userprefs
