@@ -28,6 +28,7 @@ public:
 
     // Enable or disable VSync (must be called after init or will be applied on next init)
     void vsync(bool enabled);
+    bool getVsyncEnabled() const;
 
     // Enter the main loop and run until window close.
     void mainloop();
@@ -112,7 +113,10 @@ private:
 
 
 public: // Public API
-    // Load a panorama (equirectangular) image to be used as the sky. Returns true on success.
+    // Load a skybox cubemap. 'path' is either:
+    //  - a directory containing right/left/top/bottom/front/back images (.png or .bmp), or
+    //  - a single equirectangular image (.png or .bmp)
+    // Returns true on success; if path is empty, disables skybox (fallback gradient).
     bool panorama(const std::string &path);
 
     // Regenerate terrain mesh with current constants

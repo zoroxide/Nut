@@ -18,6 +18,7 @@
 #include <sstream>
 #include <cmath>
 #include <algorithm>
+#include <filesystem>
 
 // Vertex struct
 struct Vertex { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv; };
@@ -144,6 +145,10 @@ void Engine::vsync(bool enabled) {
     if (window_) glfwSwapInterval(enabled ? 1 : 0);
 }
 
+bool Engine::getVsyncEnabled() const {
+    return vsyncEnabled_;
+}
+
 /* (Getters / Setters) */
 
 // Terrain accessors
@@ -227,9 +232,10 @@ void Engine::mainloop() {
     glUniform3f(glGetUniformLocation(shaderProgram_, "fogColor"), 0.53f, 0.8f, 1.0f);
     glUniform1f(glGetUniformLocation(shaderProgram_, "fogDensity"), 0.008f);
 
-    // sky shader texture unit binding (panorama will be bound to unit 1 at render time)
+    // sky shader texture unit binding (skybox cubemap will be bound to unit 1 at render time)
     glUseProgram(skyShader_);
-    glUniform1i(glGetUniformLocation(skyShader_, "panorama"), 1);
+    glUniform1i(glGetUniformLocation(skyShader_, "skybox"), 1);
+
     // set initial cloud uniforms (time will be updated per-frame)
     glUniform1i(glGetUniformLocation(skyShader_, "cloudEnabled"), cloudEnabled_ ? 1 : 0);
     glUniform1f(glGetUniformLocation(skyShader_, "cloudSpeed"), cloudSpeed_);
@@ -279,7 +285,7 @@ void Engine::mainloop() {
         // translation is ignored and the sky remains fixed (no parallax from camera position).
         glm::mat4 invView = glm::inverse(view);
         glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invView"), 1, GL_FALSE, glm::value_ptr(invView));
-        glUniform1i(glGetUniformLocation(skyShader_, "hasPanorama"), panoramaTexture_ ? 1 : 0);
+        glUniform1i(glGetUniformLocation(skyShader_, "hasSkybox"), panoramaTexture_ ? 1 : 0);
 
         // update animated uniforms
         // float t = (float)std::chrono::duration<double>(Clock::now() - lastFrame_).count();
@@ -294,10 +300,10 @@ void Engine::mainloop() {
         glUniform1f(glGetUniformLocation(skyShader_, "cloudScale"), cloudScale_);
         glUniform1f(glGetUniformLocation(skyShader_, "cloudOpacity"), cloudOpacity_);
 
-        // Bind panorama texture if available
+        // Bind skybox cubemap if available
         if (panoramaTexture_) {
             glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, panoramaTexture_);
+            glBindTexture(GL_TEXTURE_CUBE_MAP, panoramaTexture_);
         }
 
         // Draw full-screen triangle
@@ -517,9 +523,10 @@ GLuint Engine::loadTexture(const char* path) {
         // Upload floating-point HDR data
         glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, GL_FLOAT, dataf);
         glGenerateMipmap(GL_TEXTURE_2D);
-    // For panoramas we prefer clamp to edge to avoid seams at the texture borders
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // For panoramas we prefer clamp to edge to avoid seams at the texture borders
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         stbi_image_free(dataf);
@@ -542,6 +549,7 @@ GLuint Engine::loadTexture(const char* path) {
     // Upload 8-bit data
     glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
     glGenerateMipmap(GL_TEXTURE_2D);
+
     // Use repeat for tileable textures by default; caller (panorama) may change wrap to CLAMP_TO_EDGE
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
@@ -554,21 +562,158 @@ GLuint Engine::loadTexture(const char* path) {
 }
 
 bool Engine::panorama(const std::string &path) {
-    // Load panorama texture (can be HDR or standard)
-    if (panoramaTexture_) { glDeleteTextures(1, &panoramaTexture_); panoramaTexture_ = 0; }
-    if (path.empty()) return true; // no panorama is valid
-    // Load texture
-    panoramaTexture_ = loadTexture(path.c_str());
-    if (!panoramaTexture_) {
-        std::cerr << "Failed to load panorama: " << path << std::endl;
-        return false;
+    // Load a cubemap skybox from either:
+    // 1) A directory with 6 faces: right/left/top/bottom/front/back
+    // 2) A single equirectangular texture (e.g. one.png)
+    if (panoramaTexture_) {
+        glDeleteTextures(1, &panoramaTexture_);
+        panoramaTexture_ = 0;
     }
-    // Ensure the panorama is clamped to edge (prevents seams at the texture borders)
-    glBindTexture(GL_TEXTURE_2D, panoramaTexture_);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (path.empty()) return true;
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    bool isDir = fs::is_directory(path, ec);
+
+    GLuint texID = 0;
+    glGenTextures(1, &texID);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, texID);
+    stbi_set_flip_vertically_on_load(false);
+
+    if (isDir) {
+        auto join = [](const std::string& dir, const std::string& name) -> std::string {
+            if (dir.empty()) return name;
+            char last = dir.back();
+            if (last == '/' || last == '\\') return dir + name;
+            return dir + "/" + name;
+        };
+
+        // Support PNG and BMP face images (case-insensitive set)
+        std::vector<std::string> faceNames = {"right", "left", "top", "bottom", "front", "back"};
+        std::vector<std::string> exts = {".png", ".PNG", ".bmp", ".BMP"};
+
+        int width = 0, height = 0, channels = 0;
+        bool success = true;
+        for (GLuint i = 0; i < faceNames.size(); i++) {
+            std::string foundPath;
+            for (const auto& ext : exts) {
+                std::string candidate = join(path, faceNames[i] + ext);
+                std::error_code fec;
+                if (std::filesystem::exists(candidate, fec)) { foundPath = candidate; break; }
+            }
+            if (foundPath.empty()) {
+                std::cerr << "Missing cubemap face in folder '" << path << "': " << faceNames[i] << ".(png|bmp)" << std::endl;
+                success = false; break;
+            }
+
+            unsigned char* data = stbi_load(foundPath.c_str(), &width, &height, &channels, 0);
+            if (!data) {
+                std::cerr << "Failed to load cubemap face: " << foundPath << std::endl;
+                success = false; break;
+            }
+            GLenum format = (channels == 4) ? GL_RGBA : GL_RGB;
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, format,
+                         width, height, 0, format, GL_UNSIGNED_BYTE, data);
+            stbi_image_free(data);
+        }
+        if (!success) { glDeleteTextures(1, &texID); return false; }
+    } else {
+        // Single equirectangular texture -> convert to cubemap
+        int iw = 0, ih = 0, ic = 0;
+        unsigned char* img = stbi_load(path.c_str(), &iw, &ih, &ic, 3);
+        if (!img) {
+            std::cerr << "Failed to load equirectangular image: " << path << std::endl;
+            glDeleteTextures(1, &texID);
+            return false;
+        }
+
+        // Safe sampling helper
+        auto sampleEquirect = [&](float u, float v) -> glm::vec3 {
+            u = glm::fract(u);                // wrap horizontally
+            v = glm::clamp(v, 0.0f, 1.0f);    // clamp vertically
+
+            float x = u * (iw - 1);
+            float y = v * (ih - 1);
+            int x0 = (int)floorf(x);
+            int y0 = (int)floorf(y);
+            int x1 = (x0 + 1) % iw;
+            int y1 = std::min(y0 + 1, ih - 1);
+            float tx = x - x0;
+            float ty = y - y0;
+
+            auto at = [&](int px, int py) -> glm::vec3 {
+                size_t idx = (size_t)(py * iw + (px % iw)) * 3;
+                return glm::vec3(img[idx] / 255.0f, img[idx + 1] / 255.0f, img[idx + 2] / 255.0f);
+            };
+
+            glm::vec3 c00 = at(x0, y0);
+            glm::vec3 c10 = at(x1, y0);
+            glm::vec3 c01 = at(x0, y1);
+            glm::vec3 c11 = at(x1, y1);
+            glm::vec3 c0 = glm::mix(c00, c10, tx);
+            glm::vec3 c1 = glm::mix(c01, c11, tx);
+            glm::vec3 c = glm::mix(c0, c1, ty);
+
+            // Gamma correct (convert to linear)
+            return glm::pow(c, glm::vec3(1.0f / 2.2f));
+        };
+
+        auto dirToUV = [&](const glm::vec3& d) -> glm::vec2 {
+            float theta = atan2f(-d.z, d.x);
+            float phi   = asinf(glm::clamp(d.y, -1.0f, 1.0f));
+            float u = theta / (2.0f * (float)M_PI) + 0.5f;
+            float v = 0.5f + phi / (float)M_PI;
+            return glm::vec2(u, v);
+        };
+
+        auto faceDir = [&](int face, float u, float v) -> glm::vec3 {
+            // Correct OpenGL cube face orientation
+            switch (face) {
+                case 0: return glm::normalize(glm::vec3( 1,  v, -u)); // +X
+                case 1: return glm::normalize(glm::vec3(-1,  v,  u)); // -X
+                case 2: return glm::normalize(glm::vec3( u,  1,  v)); // +Y
+                case 3: return glm::normalize(glm::vec3( u, -1, -v)); // -Y
+                case 4: return glm::normalize(glm::vec3( u,  v,  1)); // +Z
+                default:return glm::normalize(glm::vec3(-u,  v, -1)); // -Z
+            }
+        };
+
+        int faceSize = std::max(256, iw / 2); // high-quality cube faces
+        std::vector<unsigned char> facePixels(faceSize * faceSize * 3);
+
+        for (int face = 0; face < 6; ++face) {
+            for (int y = 0; y < faceSize; ++y) {
+                for (int x = 0; x < faceSize; ++x) {
+                    float u = 2.0f * ((x + 0.5f) / faceSize) - 1.0f;
+                    float v = 2.0f * ((y + 0.5f) / faceSize) - 1.0f;
+                    glm::vec3 dir = faceDir(face, u, v);
+                    glm::vec2 uv = dirToUV(dir);
+                    glm::vec3 c = sampleEquirect(uv.x, uv.y);
+                    size_t idx = (size_t)(y * faceSize + x) * 3;
+                    facePixels[idx + 0] = (unsigned char)glm::clamp(c.r * 255.0f, 0.0f, 255.0f);
+                    facePixels[idx + 1] = (unsigned char)glm::clamp(c.g * 255.0f, 0.0f, 255.0f);
+                    facePixels[idx + 2] = (unsigned char)glm::clamp(c.b * 255.0f, 0.0f, 255.0f);
+                }
+            }
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGB,
+                         faceSize, faceSize, 0, GL_RGB, GL_UNSIGNED_BYTE, facePixels.data());
+        }
+
+        stbi_image_free(img);
+    }
+
+    // Filtering + edge clamp
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+
+    panoramaTexture_ = texID;
     return true;
 }
+
 
 // Input callbacks
 void Engine::cursorPosCallbackStatic(GLFWwindow*, double xpos, double ypos) { if (s_instance_) s_instance_->cursorPosCallback(xpos, ypos); }

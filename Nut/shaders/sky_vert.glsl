@@ -4,6 +4,7 @@ out vec3 vDir; // world-space ray direction
 
 uniform mat4 invProj;
 uniform mat4 invView;
+// Note: For skybox cubemap we only use direction; no changes needed here.
 
 void main() {
     // aPos is in NDC coords: (-1,-1), (3,-1), (-1,3) -> full-screen triangle trick

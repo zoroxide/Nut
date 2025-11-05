@@ -53,16 +53,35 @@ void GUI::render() {
 
     ImGui::Begin("Engine Controls");
 
-    // Panorama
+    // Performance
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        float fps = io.Framerate;
+        float ms = fps > 0.0f ? 1000.0f / fps : 0.0f;
+        ImGui::Text("FPS: %.1f (%.3f ms)", fps, ms);
+
+        int vsMode = engine_->getVsyncEnabled() ? 1 : 0;
+        int prev = vsMode;
+        if (ImGui::RadioButton("VSync On", vsMode == 1)) vsMode = 1;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("VSync Off", vsMode == 0)) vsMode = 0;
+        if (vsMode != prev) {
+            engine_->vsync(vsMode == 1);
+        }
+    }
+
+    ImGui::Separator();
+
+    // Skybox (folder with faces OR single equirectangular .png)
     char pbuf[512];
     std::string currentP = engine_->getPanoramaPath();
     strncpy(pbuf, currentP.c_str(), sizeof(pbuf)); pbuf[sizeof(pbuf)-1] = '\0';
 
-    if (ImGui::InputText("Panorama Path", pbuf, sizeof(pbuf))) {
+    if (ImGui::InputText("Skybox Path (folder: right/left/top/bottom/front/back .png|.bmp OR single equirectangular .png|.bmp)", pbuf, sizeof(pbuf))) {
         engine_->setPanoramaPath(std::string(pbuf));
     }
 
-    if (ImGui::Button("Load Panorama")) {
+    if (ImGui::Button("Load Skybox")) {
         engine_->panorama(engine_->getPanoramaPath());
     }
 

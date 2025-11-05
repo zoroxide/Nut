@@ -9,10 +9,10 @@ int main() {
         return -1;
     }
 
-    engine.load_terrain_using_texture("assets/grass.png");
+    engine.load_terrain_using_texture("assets/textures/grass.png");
 
-    if (!engine.panorama("assets/belfast_sunset_puresky_4k.hdr")) {
-        std::cerr << "Failed to load panorama texture\n";
+    if (!engine.panorama("assets/skybox/Daylight Box UV.png")) {
+        std::cerr << "Failed to load skybox (provide folder of faces or single equirectangular .png)\n";
     }
 
     engine.vsync(true);
