@@ -10,6 +10,8 @@ Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image 
 
 ### with GUI (Dear Imgui)
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/d0fcbf73-9daa-42e4-8045-116761a2fe4d" />
+<img width="1927" height="1080" alt="image" src="https://github.com/user-attachments/assets/50be3578-bbae-4739-96e2-42976e7c3efa" />
+
 
 <!-- 
 ### without using panorama
