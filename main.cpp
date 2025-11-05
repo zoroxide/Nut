@@ -11,7 +11,7 @@ int main() {
 
     engine.load_terrain_using_texture("assets/textures/grass.png");
 
-    if (!engine.panorama("assets/skybox/Daylight Box UV.png")) {
+    if (!engine.panorama("assets/skybox/pngwing.com.png")) {
         std::cerr << "Failed to load skybox (provide folder of faces or single equirectangular .png)\n";
     }
 
