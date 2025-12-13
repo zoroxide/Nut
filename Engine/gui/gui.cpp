@@ -1,5 +1,5 @@
 #include "gui.h"
-#include "../Nut.h"
+#include "../Engine.h"
 
 #include "../libs/imgui/imgui.h"
 #include "../libs/imgui/backends/imgui_impl_glfw.h"
@@ -50,6 +50,15 @@ void GUI::render() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+
+    // HUD: top-left coin counter
+    {
+        ImGui::SetNextWindowPos(ImVec2(10,10), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.35f);
+        ImGui::Begin("HUD", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
+    ImGui::Text("Coins: %d", engine_->getCoinsCollected());
+        ImGui::End();
+    }
 
     ImGui::Begin("Engine Controls");
 

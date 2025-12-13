@@ -1,27 +1,25 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -I./Nut -I./Nut/gui -I./Nut/libs/imgui -I./Nut/libs/imgui/backends
+CXXFLAGS = -std=c++17 -Wall -I./Engine -I./Engine/gui -I./Engine/libs/imgui -I./Engine/libs/imgui/backends
 LIBS = -lGLEW -lglfw -lGL -ldl -lpthread -lm -lassimp -Wl,--copy-dt-needed-entries
 
 SRC = main.cpp \
-      Nut/Nut.cpp \
-      Nut/Camera.cpp \
-      Nut/Shaders.cpp \
-      Nut/ECS.cpp \
-      Nut/Terrain.cpp \
-      Nut/Skybox.cpp \
-      Nut/Models.cpp \
-      Nut/Renderer.cpp \
-      Nut/gui/gui.cpp \
-      Nut/libs/stb_image.cpp \
-      Nut/libs/imgui/imgui.cpp \
-      Nut/libs/imgui/imgui_draw.cpp \
-      Nut/libs/imgui/imgui_tables.cpp \
-      Nut/libs/imgui/imgui_widgets.cpp \
-      Nut/libs/imgui/backends/imgui_impl_glfw.cpp \
-      Nut/libs/imgui/backends/imgui_impl_opengl3.cpp
-
-# IMGUI_SRC = libs/imgui/imgui.cpp libs/imgui/backends/imgui_impl_glfw.cpp libs/imgui/backends/imgui_impl_opengl3.cpp
-# SRC += $(IMGUI_SRC)
+      Engine/Engine.cpp \
+      Engine/Camera.cpp \
+      Engine/Shaders.cpp \
+      Engine/ECS.cpp \
+      Engine/Terrain.cpp \
+      Engine/Skybox.cpp \
+      Engine/Models.cpp \
+      Engine/Renderer.cpp \
+      Engine/gui/gui.cpp \
+      Engine/Coins.cpp \
+      Engine/libs/stb_image.cpp \
+      Engine/libs/imgui/imgui.cpp \
+      Engine/libs/imgui/imgui_draw.cpp \
+      Engine/libs/imgui/imgui_tables.cpp \
+      Engine/libs/imgui/imgui_widgets.cpp \
+      Engine/libs/imgui/backends/imgui_impl_glfw.cpp \
+      Engine/libs/imgui/backends/imgui_impl_opengl3.cpp
 
 OUT_DIR = build
 TARGET = program

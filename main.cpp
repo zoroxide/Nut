@@ -1,4 +1,4 @@
-#include "Nut/Nut.h"
+#include "Engine/Engine.h"
 #include <iostream>
 
 using namespace std;
@@ -11,8 +11,9 @@ int main() {
         return -1;
     }
 
-    // engine.load_terrain_using_texture("assets/textures/grass.png");
-    engine.load_flat_terrain("assets/textures/grass.png");
+    engine.load_terrain_using_texture("assets/textures/grass.png");
+    // engine.load_flat_terrain("assets/textures/grass.png");
+
     engine.vsync(true);
 
     engine.mainloop();

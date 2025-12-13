@@ -1,3 +1,4 @@
+#include "Coins.h"
 #pragma once
 
 #include <GL/glew.h>
@@ -23,6 +24,7 @@ using Clock = std::chrono::high_resolution_clock;
 
 class Engine {
 public:
+    int getCoinsCollected() const { return coinsCollected_; }
     Engine();
     ~Engine();
 
@@ -106,6 +108,7 @@ private:
     Terrain terrain_;
     Models models_;
     Renderer renderer_;
+    Coins coins_;
 
     // Configurable constants (moved from macros to members so we can change them at runtime)
     int terrainSize_;
@@ -122,6 +125,7 @@ private:
     float cloudSpeed_;
     float cloudScale_;
     float cloudOpacity_;
+    int coinsCollected_ = 0;
 
 
 public: // Public API

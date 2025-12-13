@@ -9,6 +9,8 @@ uniform sampler2D texture1;
 uniform vec3 lightDir;
 uniform vec3 lightColor;
 uniform vec3 viewPos;
+uniform int useSolidColor;
+uniform vec3 solidColor;
 // uniform vec3 fogColor;
 // uniform float fogDensity;
 uniform bool renderSky;
@@ -25,8 +27,8 @@ void main() {
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
     vec3 specular = 0.25 * spec * lightColor;
 
-    vec3 tex = texture(texture1, TexCoords).rgb;
-    vec3 result = (0.25 + diffuse + specular) * tex;
+    vec3 baseColor = (useSolidColor == 1) ? solidColor : texture(texture1, TexCoords).rgb;
+    vec3 result = (0.25 + diffuse + specular) * baseColor;
 
     // Fog calculation (commented out)
     // float dist = length(viewPos - FragPos);
