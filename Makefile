@@ -1,10 +1,18 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -I./Nut -I./Nut/gui -I./Nut/libs/imgui -I./Nut/libs/imgui/backends
-LIBS = -lGLEW -lglfw -lGL -ldl -lpthread -lm -lassimp
+LIBS = -lGLEW -lglfw -lGL -ldl -lpthread -lm -lassimp -Wl,--copy-dt-needed-entries
 
 SRC = main.cpp \
       Nut/Nut.cpp \
+      Nut/Camera.cpp \
+      Nut/Shaders.cpp \
+      Nut/ECS.cpp \
+      Nut/Terrain.cpp \
+      Nut/Skybox.cpp \
+      Nut/Models.cpp \
+      Nut/Renderer.cpp \
       Nut/gui/gui.cpp \
+      Nut/libs/stb_image.cpp \
       Nut/libs/imgui/imgui.cpp \
       Nut/libs/imgui/imgui_draw.cpp \
       Nut/libs/imgui/imgui_tables.cpp \

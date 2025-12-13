@@ -1,9 +1,7 @@
 #include "Nut.h"
 #include "gui/gui.h"
 
-// STB Image
-#define STB_IMAGE_IMPLEMENTATION
-#include "./libs/stb_image.h"
+// Image loading is encapsulated in subsystems; no STB implementation here
 
 // GLMs
 #include <glm/gtc/matrix_transform.hpp>
@@ -14,11 +12,8 @@
 // STLs
 #include <iostream>
 #include <vector>
-#include <fstream>
-#include <sstream>
 #include <cmath>
 #include <algorithm>
-#include <filesystem>
 
 // Vertex struct
 struct Vertex { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv; };
@@ -27,8 +22,8 @@ struct Vertex { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv; };
 Engine* Engine::s_instance_ = nullptr;
 
 Engine::Engine()
-    : window_(nullptr), shaderProgram_(0), vao_(0), vbo_(0), ebo_(0), indexCount_(0), grassTexture_(0),
-      panoramaTexture_(0), skyShader_(0), skyVAO_(0), skyVBO_(0),
+    : window_(nullptr), shaderProgram_(0),
+    skyShader_(0),
       cameraPos_(0.0f, 6.0f, 12.0f), yaw_(-90.0f), pitch_(-15.0f), mouseSensitivity_(0.12f), moveSpeed_(6.0f),
       lastX_(0.0), lastY_(0.0), firstMouse_(true), lastFrame_(Clock::now()), deltaTime_(0.0f), jumping_(false), jumpVel_(0.0f), vsyncEnabled_(true)
 {
@@ -56,13 +51,7 @@ Engine::~Engine() {
     // Cleanup
     if (shaderProgram_) glDeleteProgram(shaderProgram_);
     if (skyShader_) glDeleteProgram(skyShader_);
-    if (grassTexture_) glDeleteTextures(1, &grassTexture_);
-    if (panoramaTexture_) glDeleteTextures(1, &panoramaTexture_);
-    if (vbo_) glDeleteBuffers(1, &vbo_);
-    if (ebo_) glDeleteBuffers(1, &ebo_);
-    if (vao_) glDeleteVertexArrays(1, &vao_);
-    if (skyVBO_) glDeleteBuffers(1, &skyVBO_);
-    if (skyVAO_) glDeleteVertexArrays(1, &skyVAO_);
+    // Skybox VAO/VBO are managed by Skybox class
     if (window_) glfwTerminate();
 
     if (gui_) { delete gui_; gui_ = nullptr; }
@@ -108,36 +97,21 @@ bool Engine::init(bool fullscreen) {
     glDisable(GL_CULL_FACE);
 
     // Resources Loading(shaders, terrain mesh, etc)
-    shaderProgram_ = createProgram("Nut/shaders/vertex.glsl", "Nut/shaders/fragment.glsl");
-    // Create a simple model shader for OBJ houses (position-only)
-    GLuint modelVS = compileShaderFromFile("Nut/shaders/vertex.glsl", GL_VERTEX_SHADER);
-    GLuint modelFS = compileShaderFromFile("Nut/shaders/fragment.glsl", GL_FRAGMENT_SHADER);
-    // Reuse terrain shaders initially (positions/normals logic will ignore missing attribs).
-    // For robust rendering, separate model shaders can be added later.
+    shaderProgram_ = shaders_.loadProgram("terrain", "Nut/shaders/vertex.glsl", "Nut/shaders/fragment.glsl");
+    // Reuse terrain shader initially for simple model rendering.
+    // For robust rendering, a separate model shader can be added later.
 
-    // Create sky shader and full-screen triangle VAO
-    skyShader_ = createProgram("Nut/shaders/sky_vert.glsl", "Nut/shaders/sky_frag.glsl");
-    {
-        // Full-screen triangle setup
-        float skyVerts[] = {
-            -1.0f, -1.0f,
-             3.0f, -1.0f,
-            -1.0f,  3.0f
-        };
+    // Create sky shader and setup Skybox helper
+    skyShader_ = shaders_.loadProgram("sky", "Nut/shaders/sky_vert.glsl", "Nut/shaders/sky_frag.glsl");
+    sky_.setShader(skyShader_);
+    sky_.initFullscreenTriangle();
 
-        // Setup sky VAO/VBO
-        glGenVertexArrays(1, &skyVAO_);
-        glGenBuffers(1, &skyVBO_);
-        glBindVertexArray(skyVAO_);
-        glBindBuffer(GL_ARRAY_BUFFER, skyVBO_);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(skyVerts), skyVerts, GL_STATIC_DRAW);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
-        glBindVertexArray(0);
-    }
+    // Renderer programs and scene wiring
+    renderer_.setPrograms(shaderProgram_, skyShader_);
+    renderer_.setScene(&terrain_, &sky_, &models_);
 
-    buildTerrainMesh(); // helper builds terrain and calls
-    uploadMeshToGPU();  // helper uploads mesh to GPU
+    // Generate initial procedural terrain via Terrain subsystem
+    terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_, textureTile_);
 
     // Initialize GUI after the OpenGL context is created
     if (gui_) gui_->init(window_);
@@ -183,134 +157,29 @@ float Engine::getCloudOpacity() const { return cloudOpacity_; }
 void Engine::setCloudOpacity(float v) { cloudOpacity_ = v; }
 
 void Engine::load_terrain_using_texture(const std::string &texturePath, const std::string &objPath) {
-    grassTexture_ = loadTexture(texturePath.c_str());
-    if (!grassTexture_) std::cerr << "Warning: grass texture failed to load\n";
+    // Load a procedural terrain texture via Terrain subsystem
+    if (!texturePath.empty()) {
+        terrain_.loadProceduralTexture(texturePath);
+    }
 
     if (!objPath.empty()) {
-        // Load OBJ model using Assimp
-        Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(objPath, aiProcess_Triangulate | aiProcess_FlipUVs);
-        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-            std::cerr << "Error: Failed to load OBJ file: " << importer.GetErrorString() << "\n";
-            return;
-        }
-
-        // Process the scene (for simplicity, assume single mesh)
-        aiMesh* mesh = scene->mMeshes[0];
-        std::vector<float> vertices;
-        for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
-            vertices.push_back(mesh->mVertices[i].x);
-            vertices.push_back(mesh->mVertices[i].y);
-            vertices.push_back(mesh->mVertices[i].z);
-        }
-
-        // Generate VAO/VBO for the model
-        GLuint vao, vbo;
-        glGenVertexArrays(1, &vao);
-        glGenBuffers(1, &vbo);
-
-        glBindVertexArray(vao);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glBindVertexArray(0);
-
-        // Add as a house at origin for now
-        House h;
-        h.vao = vao;
-        h.vbo = vbo;
-        h.vertexCount = mesh->mNumVertices;
-        h.position = glm::vec3(0.0f, 0.0f, 0.0f);
-        h.scale = glm::vec3(1.0f);
-        houses_.push_back(h);
+        models_.loadOBJ(objPath, glm::vec3(0.0f), glm::vec3(1.0f));
     }
 }
 
 void Engine::add_house(const std::string& objPath, const glm::vec3& position, const glm::vec3& scale) {
-    Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(objPath, aiProcess_Triangulate | aiProcess_FlipUVs);
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-        std::cerr << "Error: Failed to load house OBJ: " << importer.GetErrorString() << "\n";
-        return;
+    // Delegate to Models manager
+    if (!models_.loadOBJ(objPath, position, scale)) {
+        std::cerr << "Error: Failed to load house OBJ via Models: " << objPath << "\n";
     }
-    aiMesh* mesh = scene->mMeshes[0];
-    std::vector<float> vertices;
-    vertices.reserve(mesh->mNumVertices * 3);
-    for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
-        vertices.push_back(mesh->mVertices[i].x);
-        vertices.push_back(mesh->mVertices[i].y);
-        vertices.push_back(mesh->mVertices[i].z);
-    }
-    GLuint vao, vbo;
-    glGenVertexArrays(1, &vao);
-    glGenBuffers(1, &vbo);
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-
-    House h;
-    h.vao = vao;
-    h.vbo = vbo;
-    h.vertexCount = mesh->mNumVertices;
-    h.position = position;
-    h.scale = scale;
-    houses_.push_back(h);
 }
 
 bool Engine::load_flat_terrain(const std::string &texturePath) {
-    // Clean up previous flat resources if any
-    if (flatVAO_) { glDeleteVertexArrays(1, &flatVAO_); flatVAO_ = 0; }
-    if (flatVBO_) { glDeleteBuffers(1, &flatVBO_); flatVBO_ = 0; }
-    if (flatEBO_) { glDeleteBuffers(1, &flatEBO_); flatEBO_ = 0; }
-    if (flatTex_) { glDeleteTextures(1, &flatTex_); flatTex_ = 0; }
-
-    // Load texture
-    flatTex_ = loadTexture(texturePath.c_str());
-    if (!flatTex_) {
-        std::cerr << "Error: Failed to load flat terrain texture: " << texturePath << "\n";
-        hasFlat_ = false;
-        return false;
-    }
-
-    // Define a simple quad centered at origin in XZ plane (Y=0)
-    struct FlatVertex { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv; };
-    FlatVertex verts[4] = {
-        { {-1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f} },
-        { { 1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f} },
-        { { 1.0f, 0.0f,  1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f} },
-        { {-1.0f, 0.0f,  1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f} },
-    };
-    unsigned int indices[6] = { 0, 1, 2, 0, 2, 3 };
-
-    // Create VAO/VBO/EBO
-    glGenVertexArrays(1, &flatVAO_);
-    glGenBuffers(1, &flatVBO_);
-    glGenBuffers(1, &flatEBO_);
-
-    glBindVertexArray(flatVAO_);
-    glBindBuffer(GL_ARRAY_BUFFER, flatVBO_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, flatEBO_);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
-
-    // Attribute layout matches terrain shader: location 0=pos, 1=normal, 2=uv
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(FlatVertex), (void*)offsetof(FlatVertex, pos));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(FlatVertex), (void*)offsetof(FlatVertex, normal));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(FlatVertex), (void*)offsetof(FlatVertex, uv));
-    glBindVertexArray(0);
-
-    hasFlat_ = true;
+    // Propagate current texture tiling to Terrain so flat UVs are repeated
+    terrain_.setTextureTile(textureTile_);
+    hasFlat_ = terrain_.buildFlat(texturePath);
+    if (!hasFlat_) return false;
+    terrain_.setFlatScale(glm::vec3(terrainSize_ * terrainScale_ * 0.5f, 1.0f, terrainSize_ * terrainScale_ * 0.5f));
     return true;
 }
 void Engine::mainloop() {
@@ -349,15 +218,11 @@ void Engine::mainloop() {
         updateMovement(deltaTime_);
 
         // Camera
-        glm::vec3 front(
-            cos(glm::radians(yaw_)) * cos(glm::radians(pitch_)),
-            sin(glm::radians(pitch_)),
-            sin(glm::radians(yaw_)) * cos(glm::radians(pitch_))
-        );
-
-        // View and Projection matrices
-        glm::mat4 view = glm::lookAt(cameraPos_, cameraPos_ + glm::normalize(front), glm::vec3(0,1,0));
-        glm::mat4 proj = glm::perspective(glm::radians(60.0f), (float)SCR_W / (float)SCR_H, 0.1f, 500.0f);
+        // Camera matrices
+        camera_.setPosition(cameraPos_);
+        camera_.setYawPitch(yaw_, pitch_);
+        glm::mat4 view = camera_.getView();
+        glm::mat4 proj = camera_.getProj(60.0f, (float)SCR_W / (float)SCR_H, 0.1f, 500.0f);
         glm::mat4 model(1.0f);
 
         // --- Clear first (important!) ---
@@ -378,7 +243,7 @@ void Engine::mainloop() {
         // translation is ignored and the sky remains fixed (no parallax from camera position).
         glm::mat4 invView = glm::inverse(view);
         glUniformMatrix4fv(glGetUniformLocation(skyShader_, "invView"), 1, GL_FALSE, glm::value_ptr(invView));
-        glUniform1i(glGetUniformLocation(skyShader_, "hasSkybox"), panoramaTexture_ ? 1 : 0);
+    glUniform1i(glGetUniformLocation(skyShader_, "hasSkybox"), sky_.hasCubemap() ? 1 : 0);
 
         // update animated uniforms
         // float t = (float)std::chrono::duration<double>(Clock::now() - lastFrame_).count();
@@ -393,50 +258,20 @@ void Engine::mainloop() {
         glUniform1f(glGetUniformLocation(skyShader_, "cloudScale"), cloudScale_);
         glUniform1f(glGetUniformLocation(skyShader_, "cloudOpacity"), cloudOpacity_);
 
-        // Bind skybox cubemap if available
-        if (panoramaTexture_) {
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_CUBE_MAP, panoramaTexture_);
-        }
+        // Bind skybox cubemap handled inside Skybox::draw
 
-        // Draw full-screen triangle
-        glBindVertexArray(skyVAO_);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-        glBindVertexArray(0);
+    // Draw full-screen triangle via Skybox class
+    sky_.draw(invView, invProj, sky_.hasCubemap(), runTime, cloudEnabled_, cloudSpeed_, cloudScale_, cloudOpacity_);
 
         // --- Re-enable depth test for terrain ---
         glEnable(GL_DEPTH_TEST);
 
-        // --- Then draw terrain (flat if requested, otherwise procedural) ---
-        glUseProgram(shaderProgram_);
-        glUniform3fv(glGetUniformLocation(shaderProgram_, "viewPos"), 1, glm::value_ptr(cameraPos_));
+    // --- Then draw terrain via Renderer (which calls Terrain) ---
+    renderer_.drawFrame(view, proj, model, invView, invProj, cameraPos_, sky_.hasCubemap(),
+                runTime, cloudEnabled_, cloudSpeed_, cloudScale_, cloudOpacity_);
 
-        if (hasFlat_) {
-            glm::mat4 Mflat = glm::scale(glm::mat4(1.0f), glm::vec3(terrainSize_ * terrainScale_ * 0.5f, 1.0f, terrainSize_ * terrainScale_ * 0.5f));
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "model"), 1, GL_FALSE, glm::value_ptr(Mflat));
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "mvp"), 1, GL_FALSE, glm::value_ptr(proj * view * Mflat));
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, flatTex_);
-            glBindVertexArray(flatVAO_);
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-            glBindVertexArray(0);
-        } else {
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "mvp"), 1, GL_FALSE, glm::value_ptr(proj * view * model));
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "model"), 1, GL_FALSE, glm::value_ptr(model));
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, grassTexture_);
-            glBindVertexArray(vao_);
-            glDrawElements(GL_TRIANGLES, (GLsizei)indexCount_, GL_UNSIGNED_INT, 0);
-        }
-
-        // --- Draw houses (simple position-only rendering using current program's MVP) ---
-        for (const auto& h : houses_) {
-            glm::mat4 M = glm::translate(glm::mat4(1.0f), h.position) * glm::scale(glm::mat4(1.0f), h.scale);
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "model"), 1, GL_FALSE, glm::value_ptr(M));
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "mvp"), 1, GL_FALSE, glm::value_ptr(proj * view * M));
-            glBindVertexArray(h.vao);
-            glDrawArrays(GL_TRIANGLES, 0, (GLsizei)h.vertexCount);
-        }
+        // --- Draw models via Models manager ---
+        models_.drawAll(shaderProgram_, view, proj);
 
         // Render GUI
         gui_->render();
@@ -449,381 +284,13 @@ void Engine::mainloop() {
 
 // ---------------- Utility / helpers ----------------
 
-std::string Engine::loadFile(const char* path) {
-    std::ifstream in(path);
-    if(!in) { std::cerr << "Failed to open " << path << std::endl; return {}; }
-    std::stringstream ss; ss << in.rdbuf(); return ss.str();
-}
-
-GLuint Engine::compileShaderFromFile(const char* path, GLenum type) {
-    /* load resources */
-
-    // load file contents
-    std::string src = loadFile(path);
-
-    // safety check
-    if(src.empty()) return 0;
-
-    /* Compile */
-
-    // convert to c-string
-    const char* csrc = src.c_str();
-
-    // create shader
-    GLuint sh = glCreateShader(type);
-
-    // gl calls for loading
-    glShaderSource(sh, 1, &csrc, nullptr);
-
-    // gl calls for compiling
-    glCompileShader(sh);
-
-    // Check errors
-    GLint ok; glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-
-    // If error, print log
-    if(!ok) { char buf[4096]; glGetShaderInfoLog(sh, 4096, nullptr, buf); std::cerr << "Shader compile error (" << path << "):\n" << buf << std::endl; }
-    
-    // return compiled shader
-    return sh;
-}
-
-GLuint Engine::createProgram(const char* vsPath, const char* fsPath) {
-    /* Compile shaders and link into a program */
-    GLuint vs = compileShaderFromFile(vsPath, GL_VERTEX_SHADER); // compile vertex shader
-    GLuint fs = compileShaderFromFile(fsPath, GL_FRAGMENT_SHADER); // compile fragment shader
-
-    if(!vs || !fs) return 0; // safety check
-
-    // link program
-    GLuint prog = glCreateProgram(); glAttachShader(prog, vs); glAttachShader(prog, fs); glLinkProgram(prog);
-
-    // Check errors
-    GLint ok; glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-
-    // If error, print log
-    if(!ok) { char buf[4096]; glGetProgramInfoLog(prog, 4096, nullptr, buf); std::cerr << "Program link error:\n" << buf << std::endl; }
-    
-    // Cleanup shaders
-    glDeleteShader(vs); glDeleteShader(fs); return prog;
-}
+// Removed low-level shader and file utilities; ShaderManager handles this
 
 // ---------------- Terrain generation inline helpers ----------------
-inline float lerp(float a, float b, float t) { return a + (b - a) * t; } // linear interpolation
-inline float fade(float t) { return t * t * (3.0f - 2.0f * t); }         // fade function for smoothstep
-
-int hashI(int x, int y) { int n = x + y * 57; n = (n << 13) ^ n; return (n * (n * n * 60493 + 19990303) + 1376312589) & 0x7fffffff; } // integer hash
-
-float valueNoise(int x, int y) { return (hashI(x, y) / float(0x7fffffff)) * 2.0f - 1.0f; } // value noise in [-1,1]
-
-// 2D smooth noise
-float smoothNoise(float x, float y) {
-    int xf = (int)floor(x); int yf = (int)floor(y);
-    float xf_frac = x - xf; float yf_frac = y - yf;
-    float v00 = valueNoise(xf, yf); float v10 = valueNoise(xf + 1, yf); float v01 = valueNoise(xf, yf + 1); float v11 = valueNoise(xf + 1, yf + 1);
-    float i1 = lerp(v00, v10, fade(xf_frac)); float i2 = lerp(v01, v11, fade(xf_frac)); return lerp(i1, i2, fade(yf_frac));
-}
-
-float Engine::fbm(float x, float y) {
-    float total = 0.0f; float amp = 1.0f; float freq = 1.0f; const int OCT = 6; const float gain = 0.5f;
-    for (int i = 0; i < OCT; ++i) { total += amp * smoothNoise(x * freq, y * freq); freq *= 2.0f; amp *= gain; }
-    return total;
-}
-
-float Engine::getTerrainHeight(float wx, float wz) {
-    // Convert world coords to terrain local coords using runtime-configurable values
-    float half = (terrainSize_ - 1) * 0.5f * terrainScale_;
-    float x = (wx + half) / terrainScale_;
-    float z = (wz + half) / terrainScale_;
-    return fbm(x * 0.06f, z * 0.06f) * heightScale_;
-}
-
-void Engine::buildTerrainMesh() {
-    // Build terrain mesh (vertices, normals, uvs, indices)
-    std::vector<Vertex> vertices; std::vector<GLuint> indices;
-
-    // number of vertices along one side (runtime-configurable)
-    int N = terrainSize_; float half = (N - 1) * 0.5f * terrainScale_;
-
-    // Generate heights using fbm
-    std::vector<std::vector<float>> heights(N, std::vector<float>(N));
-
-    // Fill heights
-    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) heights[z][x] = fbm(x * 0.06f, z * 0.06f) * heightScale_;
-
-    // Generate vertices
-    vertices.resize(N * N);
-    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
-        Vertex &V = vertices[z * N + x];
-        V.pos = glm::vec3(x * terrainScale_ - half, heights[z][x], z * terrainScale_ - half);
-        V.uv  = glm::vec2((float)x / (N - 1) * textureTile_, (float)z / (N - 1) * textureTile_);
-    }
-
-    // Generate indices (two triangles per quad)
-    for (int z = 0; z < N - 1; ++z) for (int x = 0; x < N - 1; ++x) {
-        int tl = z * N + x; int tr = tl + 1; int bl = (z + 1) * N + x; int br = bl + 1;
-        if (tl < 0 || tr < 0 || bl < 0 || br < 0) continue;
-        if (tl >= N*N || tr >= N*N || bl >= N*N || br >= N*N) continue;
-        if (tl == bl || bl == br || br == tl) continue;
-        if (tl == br || br == tr || tr == tl) continue;
-        indices.push_back(tl); indices.push_back(bl); indices.push_back(br);
-        indices.push_back(tl); indices.push_back(br); indices.push_back(tr);
-    }
-
-    // Compute normals (average face normals)
-    std::vector<glm::vec3> normalSum(vertices.size(), glm::vec3(0.0f));
-    for (size_t i = 0; i < indices.size(); i += 3) {
-        unsigned int i0 = indices[i]; unsigned int i1 = indices[i + 1]; unsigned int i2 = indices[i + 2];
-        glm::vec3 p0 = vertices[i0].pos; glm::vec3 p1 = vertices[i1].pos; glm::vec3 p2 = vertices[i2].pos;
-        glm::vec3 normal = glm::normalize(glm::cross(p1 - p0, p2 - p0));
-        normalSum[i0] += normal; normalSum[i1] += normal; normalSum[i2] += normal;
-    }
-
-    // Normalize summed normals
-    for (size_t i = 0; i < vertices.size(); ++i) vertices[i].normal = glm::normalize(normalSum[i]);
-
-    // TODO: Upload to member buffers (interleave here)
-    // Cleanup old
-    if (vao_) { glDeleteBuffers(1, &vbo_); glDeleteBuffers(1, &ebo_); glDeleteVertexArrays(1, &vao_); }
-    glGenVertexArrays(1, &vao_); glGenBuffers(1, &vbo_); glGenBuffers(1, &ebo_);
-    glBindVertexArray(vao_);
-
-    // Interleave data
-    std::vector<float> inter; inter.reserve(vertices.size() * 8);
-    for (auto &v : vertices) inter.insert(inter.end(), {v.pos.x, v.pos.y, v.pos.z, v.normal.x, v.normal.y, v.normal.z, v.uv.x, v.uv.y});
-
-    // create and upload buffers
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_); glBufferData(GL_ARRAY_BUFFER, inter.size() * sizeof(float), inter.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_); glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
-    indexCount_ = indices.size();
-
-    // vertex attributes
-    GLsizei stride = 8 * sizeof(float);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0); glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float))); glEnableVertexAttribArray(2);
-    glBindVertexArray(0);
-}
-
-void Engine::uploadMeshToGPU() {
-    // Mesh upload is integrated into buildTerrainMesh for simplicity (in this refactor)
-}
-
-GLuint Engine::loadTexture(const char* path) {
-    // Load texture using stb_image
-    if (!path) return 0;
-    int width = 0, height = 0, nrChannels = 0;
-
-    // For panoramas, flipping vertically can be harmful; but keep user behavior consistent
-    stbi_set_flip_vertically_on_load(true);
-
-    // Detect HDR images and load accordingly (for panoramas)
-    if (stbi_is_hdr(path)) {
-
-        // load as floating point
-        // Do not flip HDR panoramas vertically when loading - equirectangular expects native orientation
-        stbi_set_flip_vertically_on_load(false);
-        float* dataf = stbi_loadf(path, &width, &height, &nrChannels, 0);
-        // safety check
-        if (!dataf) { std::cerr << "Failed to load HDR texture: " << path << std::endl; return 0; }
-
-        // Create OpenGL texture
-        GLuint textureID; glGenTextures(1, &textureID); glBindTexture(GL_TEXTURE_2D, textureID);
-        GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
-        GLenum internal = (nrChannels == 4) ? GL_RGBA16F : GL_RGB16F;
-
-        // Upload floating-point HDR data
-        glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, GL_FLOAT, dataf);
-        glGenerateMipmap(GL_TEXTURE_2D);
-
-        // For panoramas we prefer clamp to edge to avoid seams at the texture borders
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        stbi_image_free(dataf);
-
-        // return texture ID
-        return textureID;
-    }
-
-    // Load as standard 8-bit image (only 8 bit images can be used as terrain texture)
-    // Default: don't flip LDR images by default for panoramas; caller can request flip if needed
-    stbi_set_flip_vertically_on_load(false);
-    unsigned char* data = stbi_load(path, &width, &height, &nrChannels, 0);
-    // safety check
-    if (!data) { std::cerr << "Failed to load texture: " << path << std::endl; return 0; }
-
-    // Create OpenGL texture
-    GLuint textureID; glGenTextures(1, &textureID); glBindTexture(GL_TEXTURE_2D, textureID);
-    GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
-
-    // Upload 8-bit data
-    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-    glGenerateMipmap(GL_TEXTURE_2D);
-
-    // Use repeat for tileable textures by default; caller (panorama) may change wrap to CLAMP_TO_EDGE
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    stbi_image_free(data);
-
-    // return texture ID
-    return textureID;
-}
+// Removed low-level texture loading; Terrain/Skybox manage textures
 
 bool Engine::panorama(const std::string &path) {
-    // Load a cubemap skybox from either:
-    // 1) A directory with 6 faces: right/left/top/bottom/front/back
-    // 2) A single equirectangular texture (e.g. one.png)
-    if (panoramaTexture_) {
-        glDeleteTextures(1, &panoramaTexture_);
-        panoramaTexture_ = 0;
-    }
-    if (path.empty()) return true;
-
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    bool isDir = fs::is_directory(path, ec);
-
-    GLuint texID = 0;
-    glGenTextures(1, &texID);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, texID);
-    stbi_set_flip_vertically_on_load(false);
-
-    if (isDir) {
-        auto join = [](const std::string& dir, const std::string& name) -> std::string {
-            if (dir.empty()) return name;
-            char last = dir.back();
-            if (last == '/' || last == '\\') return dir + name;
-            return dir + "/" + name;
-        };
-
-        // Support PNG and BMP face images (case-insensitive set)
-        std::vector<std::string> faceNames = {"right", "left", "top", "bottom", "front", "back"};
-        std::vector<std::string> exts = {".png", ".PNG", ".bmp", ".BMP"};
-
-        int width = 0, height = 0, channels = 0;
-        bool success = true;
-        for (GLuint i = 0; i < faceNames.size(); i++) {
-            std::string foundPath;
-            for (const auto& ext : exts) {
-                std::string candidate = join(path, faceNames[i] + ext);
-                std::error_code fec;
-                if (std::filesystem::exists(candidate, fec)) { foundPath = candidate; break; }
-            }
-            if (foundPath.empty()) {
-                std::cerr << "Missing cubemap face in folder '" << path << "': " << faceNames[i] << ".(png|bmp)" << std::endl;
-                success = false; break;
-            }
-
-            unsigned char* data = stbi_load(foundPath.c_str(), &width, &height, &channels, 0);
-            if (!data) {
-                std::cerr << "Failed to load cubemap face: " << foundPath << std::endl;
-                success = false; break;
-            }
-            GLenum format = (channels == 4) ? GL_RGBA : GL_RGB;
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, format,
-                         width, height, 0, format, GL_UNSIGNED_BYTE, data);
-            stbi_image_free(data);
-        }
-        if (!success) { glDeleteTextures(1, &texID); return false; }
-    } else {
-        // Single equirectangular texture -> convert to cubemap
-        int iw = 0, ih = 0, ic = 0;
-        unsigned char* img = stbi_load(path.c_str(), &iw, &ih, &ic, 3);
-        if (!img) {
-            std::cerr << "Failed to load equirectangular image: " << path << std::endl;
-            glDeleteTextures(1, &texID);
-            return false;
-        }
-
-        // Safe sampling helper
-        auto sampleEquirect = [&](float u, float v) -> glm::vec3 {
-            u = glm::fract(u);                // wrap horizontally
-            v = glm::clamp(v, 0.0f, 1.0f);    // clamp vertically
-
-            float x = u * (iw - 1);
-            float y = v * (ih - 1);
-            int x0 = (int)floorf(x);
-            int y0 = (int)floorf(y);
-            int x1 = (x0 + 1) % iw;
-            int y1 = std::min(y0 + 1, ih - 1);
-            float tx = x - x0;
-            float ty = y - y0;
-
-            auto at = [&](int px, int py) -> glm::vec3 {
-                size_t idx = (size_t)(py * iw + (px % iw)) * 3;
-                return glm::vec3(img[idx] / 255.0f, img[idx + 1] / 255.0f, img[idx + 2] / 255.0f);
-            };
-
-            glm::vec3 c00 = at(x0, y0);
-            glm::vec3 c10 = at(x1, y0);
-            glm::vec3 c01 = at(x0, y1);
-            glm::vec3 c11 = at(x1, y1);
-            glm::vec3 c0 = glm::mix(c00, c10, tx);
-            glm::vec3 c1 = glm::mix(c01, c11, tx);
-            glm::vec3 c = glm::mix(c0, c1, ty);
-
-            // Gamma correct (convert to linear)
-            return glm::pow(c, glm::vec3(1.0f / 2.2f));
-        };
-
-        auto dirToUV = [&](const glm::vec3& d) -> glm::vec2 {
-            float theta = atan2f(-d.z, d.x);
-            float phi   = asinf(glm::clamp(d.y, -1.0f, 1.0f));
-            float u = theta / (2.0f * (float)M_PI) + 0.5f;
-            float v = 0.5f + phi / (float)M_PI;
-            return glm::vec2(u, v);
-        };
-
-        auto faceDir = [&](int face, float u, float v) -> glm::vec3 {
-            // Correct OpenGL cube face orientation
-            switch (face) {
-                case 0: return glm::normalize(glm::vec3( 1,  v, -u)); // +X
-                case 1: return glm::normalize(glm::vec3(-1,  v,  u)); // -X
-                case 2: return glm::normalize(glm::vec3( u,  1,  v)); // +Y
-                case 3: return glm::normalize(glm::vec3( u, -1, -v)); // -Y
-                case 4: return glm::normalize(glm::vec3( u,  v,  1)); // +Z
-                default:return glm::normalize(glm::vec3(-u,  v, -1)); // -Z
-            }
-        };
-
-        int faceSize = std::max(256, iw / 2); // high-quality cube faces
-        std::vector<unsigned char> facePixels(faceSize * faceSize * 3);
-
-        for (int face = 0; face < 6; ++face) {
-            for (int y = 0; y < faceSize; ++y) {
-                for (int x = 0; x < faceSize; ++x) {
-                    float u = 2.0f * ((x + 0.5f) / faceSize) - 1.0f;
-                    float v = 2.0f * ((y + 0.5f) / faceSize) - 1.0f;
-                    glm::vec3 dir = faceDir(face, u, v);
-                    glm::vec2 uv = dirToUV(dir);
-                    glm::vec3 c = sampleEquirect(uv.x, uv.y);
-                    size_t idx = (size_t)(y * faceSize + x) * 3;
-                    facePixels[idx + 0] = (unsigned char)glm::clamp(c.r * 255.0f, 0.0f, 255.0f);
-                    facePixels[idx + 1] = (unsigned char)glm::clamp(c.g * 255.0f, 0.0f, 255.0f);
-                    facePixels[idx + 2] = (unsigned char)glm::clamp(c.b * 255.0f, 0.0f, 255.0f);
-                }
-            }
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGB,
-                         faceSize, faceSize, 0, GL_RGB, GL_UNSIGNED_BYTE, facePixels.data());
-        }
-
-        stbi_image_free(img);
-    }
-
-    // Filtering + edge clamp
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
-
-    panoramaTexture_ = texID;
-    return true;
+    return sky_.loadFromPath(path);
 }
 
 
@@ -878,7 +345,7 @@ void Engine::updateMovement(float dt) {
     cameraPos_ += move;
 
     // Terrain collision and gravity
-    float terrainY = getTerrainHeight(cameraPos_.x, cameraPos_.z); float eyeHeight = 1.7f;
+    float terrainY = terrain_.getHeightAt(cameraPos_.x, cameraPos_.z); float eyeHeight = 1.7f;
     if (jumping_) {
         cameraPos_.y += jumpVel_ * dt; jumpVel_ -= 18.0f * dt;
         if (cameraPos_.y <= terrainY + eyeHeight) { cameraPos_.y = terrainY + eyeHeight; jumping_ = false; jumpVel_ = 0.0f; }
@@ -889,6 +356,5 @@ void Engine::updateMovement(float dt) {
 
 // ----------------- Runtime config API -----------------
 void Engine::regenerateTerrain() {
-    buildTerrainMesh();
-    uploadMeshToGPU();
+    terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_, textureTile_);
 }

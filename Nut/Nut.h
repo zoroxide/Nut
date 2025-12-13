@@ -11,7 +11,13 @@
 #include <vector>
 
 #include "gui/gui.h"
+#include "Camera.h"
+#include "Shaders.h"
 #include "libs/imgui/imgui.h"
+#include "Terrain.h"
+#include "Skybox.h"
+#include "Models.h"
+#include "Renderer.h"
 
 using Clock = std::chrono::high_resolution_clock;
 
@@ -40,16 +46,13 @@ private:
     // Internal state (opaque to users)
     GLFWwindow* window_;
     GLuint shaderProgram_;
-    GLuint vao_, vbo_, ebo_;
-    size_t indexCount_;
-    GLuint grassTexture_;
-    GLuint panoramaTexture_;
 
     // Sky renderer
     GLuint skyShader_;
-    GLuint skyVAO_, skyVBO_;
+    Skybox sky_;
 
     // Camera / movement
+    Camera camera_;
     glm::vec3 cameraPos_;
     float yaw_, pitch_;
     float mouseSensitivity_;
@@ -97,6 +100,12 @@ private:
 
     // GUI manager
     GUI* gui_;
+    ShaderManager shaders_;
+
+    // Subsystems
+    Terrain terrain_;
+    Models models_;
+    Renderer renderer_;
 
     // Configurable constants (moved from macros to members so we can change them at runtime)
     int terrainSize_;
@@ -151,15 +160,7 @@ public: // Public API
     float getCloudOpacity() const;
     void setCloudOpacity(float v);
 
-    // Internal helpers (defined in engine implementation)
-    std::string loadFile(const char* path);
-    GLuint compileShaderFromFile(const char* path, GLenum type);
-    GLuint createProgram(const char* vsPath, const char* fsPath);
-    float fbm(float x, float y);
-    float getTerrainHeight(float wx, float wz);
-    void buildTerrainMesh();
-    void uploadMeshToGPU();
-    GLuint loadTexture(const char* path);
+    // Internal helpers: none (delegated to subsystems)
 
     // Input helpers
     static void cursorPosCallbackStatic(GLFWwindow* , double xpos, double ypos);
@@ -168,17 +169,7 @@ public: // Public API
     void keyCallback(int key, int scancode, int action, int mods);
     void updateMovement(float dt);
 
-    // Model data
-    // Simple house model representation
-    struct House {
-        GLuint vao = 0;
-        GLuint vbo = 0;
-        size_t vertexCount = 0;
-        glm::vec3 position{0,0,0};
-        glm::vec3 scale{1,1,1};
-        float enterRadius = 2.0f; // distance threshold for entering
-    };
-    std::vector<House> houses_;
+    // Legacy model data removed; models handled by Models module
     bool insideHouse_ = false;
 
     // API to add a house model
@@ -186,10 +177,6 @@ public:
     void add_house(const std::string& objPath, const glm::vec3& position, const glm::vec3& scale = glm::vec3(1.0f));
 
 private:
-    // Flat terrain resources
-    GLuint flatVAO_ = 0;
-    GLuint flatVBO_ = 0;
-    GLuint flatEBO_ = 0;
-    GLuint flatTex_ = 0;
+    // Flat terrain state handled by Terrain subsystem
     bool hasFlat_ = false;
 };
