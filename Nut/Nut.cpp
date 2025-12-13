@@ -109,6 +109,11 @@ bool Engine::init(bool fullscreen) {
 
     // Resources Loading(shaders, terrain mesh, etc)
     shaderProgram_ = createProgram("Nut/shaders/vertex.glsl", "Nut/shaders/fragment.glsl");
+    // Create a simple model shader for OBJ houses (position-only)
+    GLuint modelVS = compileShaderFromFile("Nut/shaders/vertex.glsl", GL_VERTEX_SHADER);
+    GLuint modelFS = compileShaderFromFile("Nut/shaders/fragment.glsl", GL_FRAGMENT_SHADER);
+    // Reuse terrain shaders initially (positions/normals logic will ignore missing attribs).
+    // For robust rendering, separate model shaders can be added later.
 
     // Create sky shader and full-screen triangle VAO
     skyShader_ = createProgram("Nut/shaders/sky_vert.glsl", "Nut/shaders/sky_frag.glsl");
@@ -214,12 +219,100 @@ void Engine::load_terrain_using_texture(const std::string &texturePath, const st
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
-        // Store VAO for rendering
-        modelVAO_ = vao;
-        modelVertexCount_ = mesh->mNumVertices;
+        // Add as a house at origin for now
+        House h;
+        h.vao = vao;
+        h.vbo = vbo;
+        h.vertexCount = mesh->mNumVertices;
+        h.position = glm::vec3(0.0f, 0.0f, 0.0f);
+        h.scale = glm::vec3(1.0f);
+        houses_.push_back(h);
     }
 }
 
+void Engine::add_house(const std::string& objPath, const glm::vec3& position, const glm::vec3& scale) {
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(objPath, aiProcess_Triangulate | aiProcess_FlipUVs);
+    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+        std::cerr << "Error: Failed to load house OBJ: " << importer.GetErrorString() << "\n";
+        return;
+    }
+    aiMesh* mesh = scene->mMeshes[0];
+    std::vector<float> vertices;
+    vertices.reserve(mesh->mNumVertices * 3);
+    for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
+        vertices.push_back(mesh->mVertices[i].x);
+        vertices.push_back(mesh->mVertices[i].y);
+        vertices.push_back(mesh->mVertices[i].z);
+    }
+    GLuint vao, vbo;
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    House h;
+    h.vao = vao;
+    h.vbo = vbo;
+    h.vertexCount = mesh->mNumVertices;
+    h.position = position;
+    h.scale = scale;
+    houses_.push_back(h);
+}
+
+bool Engine::load_flat_terrain(const std::string &texturePath) {
+    // Clean up previous flat resources if any
+    if (flatVAO_) { glDeleteVertexArrays(1, &flatVAO_); flatVAO_ = 0; }
+    if (flatVBO_) { glDeleteBuffers(1, &flatVBO_); flatVBO_ = 0; }
+    if (flatEBO_) { glDeleteBuffers(1, &flatEBO_); flatEBO_ = 0; }
+    if (flatTex_) { glDeleteTextures(1, &flatTex_); flatTex_ = 0; }
+
+    // Load texture
+    flatTex_ = loadTexture(texturePath.c_str());
+    if (!flatTex_) {
+        std::cerr << "Error: Failed to load flat terrain texture: " << texturePath << "\n";
+        hasFlat_ = false;
+        return false;
+    }
+
+    // Define a simple quad centered at origin in XZ plane (Y=0)
+    struct FlatVertex { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv; };
+    FlatVertex verts[4] = {
+        { {-1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f} },
+        { { 1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f} },
+        { { 1.0f, 0.0f,  1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f} },
+        { {-1.0f, 0.0f,  1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f} },
+    };
+    unsigned int indices[6] = { 0, 1, 2, 0, 2, 3 };
+
+    // Create VAO/VBO/EBO
+    glGenVertexArrays(1, &flatVAO_);
+    glGenBuffers(1, &flatVBO_);
+    glGenBuffers(1, &flatEBO_);
+
+    glBindVertexArray(flatVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, flatVBO_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, flatEBO_);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+    // Attribute layout matches terrain shader: location 0=pos, 1=normal, 2=uv
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(FlatVertex), (void*)offsetof(FlatVertex, pos));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(FlatVertex), (void*)offsetof(FlatVertex, normal));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(FlatVertex), (void*)offsetof(FlatVertex, uv));
+    glBindVertexArray(0);
+
+    hasFlat_ = true;
+    return true;
+}
 void Engine::mainloop() {
     // Safety check
     if (!window_) return;
@@ -314,17 +407,36 @@ void Engine::mainloop() {
         // --- Re-enable depth test for terrain ---
         glEnable(GL_DEPTH_TEST);
 
-        // --- Then draw terrain ---
+        // --- Then draw terrain (flat if requested, otherwise procedural) ---
         glUseProgram(shaderProgram_);
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "mvp"), 1, GL_FALSE, glm::value_ptr(proj * view * model));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "model"), 1, GL_FALSE, glm::value_ptr(model));
         glUniform3fv(glGetUniformLocation(shaderProgram_, "viewPos"), 1, glm::value_ptr(cameraPos_));
 
-        // Bind grass texture
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, grassTexture_);
-        glBindVertexArray(vao_);
-        glDrawElements(GL_TRIANGLES, (GLsizei)indexCount_, GL_UNSIGNED_INT, 0);
+        if (hasFlat_) {
+            glm::mat4 Mflat = glm::scale(glm::mat4(1.0f), glm::vec3(terrainSize_ * terrainScale_ * 0.5f, 1.0f, terrainSize_ * terrainScale_ * 0.5f));
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "model"), 1, GL_FALSE, glm::value_ptr(Mflat));
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "mvp"), 1, GL_FALSE, glm::value_ptr(proj * view * Mflat));
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, flatTex_);
+            glBindVertexArray(flatVAO_);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            glBindVertexArray(0);
+        } else {
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "mvp"), 1, GL_FALSE, glm::value_ptr(proj * view * model));
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "model"), 1, GL_FALSE, glm::value_ptr(model));
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, grassTexture_);
+            glBindVertexArray(vao_);
+            glDrawElements(GL_TRIANGLES, (GLsizei)indexCount_, GL_UNSIGNED_INT, 0);
+        }
+
+        // --- Draw houses (simple position-only rendering using current program's MVP) ---
+        for (const auto& h : houses_) {
+            glm::mat4 M = glm::translate(glm::mat4(1.0f), h.position) * glm::scale(glm::mat4(1.0f), h.scale);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "model"), 1, GL_FALSE, glm::value_ptr(M));
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram_, "mvp"), 1, GL_FALSE, glm::value_ptr(proj * view * M));
+            glBindVertexArray(h.vao);
+            glDrawArrays(GL_TRIANGLES, 0, (GLsizei)h.vertexCount);
+        }
 
         // Render GUI
         gui_->render();

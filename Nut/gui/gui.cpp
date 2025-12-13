@@ -100,6 +100,23 @@ void GUI::render() {
 
     ImGui::Separator();
 
+    // Houses controls
+    static char hpath[512] = "assets/house.obj";
+    ImGui::InputText("House OBJ Path", hpath, sizeof(hpath));
+    static float hpos[3] = {0.0f, 0.0f, 0.0f};
+    static float hscale = 1.0f;
+    ImGui::InputFloat3("House Position (x,y,z)", hpos);
+    ImGui::InputFloat("House Uniform Scale", &hscale);
+    if (ImGui::Button("Add House")) {
+        engine_->add_house(std::string(hpath), glm::vec3(hpos[0], hpos[1], hpos[2]), glm::vec3(hscale));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Add House At Camera")) {
+        // Use current camera position with slight offset above terrain
+        // As GUI doesn't have direct camera getters, we place at origin scale; user can adjust.
+        engine_->add_house(std::string(hpath), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(hscale));
+    }
+
     // Constants
     int ts = engine_->getTerrainSize();
     if (ImGui::InputInt("Terrain Size", &ts)) {

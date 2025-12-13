@@ -8,6 +8,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <vector>
 
 #include "gui/gui.h"
 #include "libs/imgui/imgui.h"
@@ -25,6 +26,8 @@ public:
 
     // Load terrain texture and optional OBJ model from paths.
     void load_terrain_using_texture(const std::string &texturePath, const std::string &objPath = "");
+    // Load and prepare a simple flat terrain (textured quad). Returns true on success.
+    bool load_flat_terrain(const std::string &texturePath);
 
     // Enable or disable VSync (must be called after init or will be applied on next init)
     void vsync(bool enabled);
@@ -166,6 +169,27 @@ public: // Public API
     void updateMovement(float dt);
 
     // Model data
-    GLuint modelVAO_;
-    size_t modelVertexCount_;
+    // Simple house model representation
+    struct House {
+        GLuint vao = 0;
+        GLuint vbo = 0;
+        size_t vertexCount = 0;
+        glm::vec3 position{0,0,0};
+        glm::vec3 scale{1,1,1};
+        float enterRadius = 2.0f; // distance threshold for entering
+    };
+    std::vector<House> houses_;
+    bool insideHouse_ = false;
+
+    // API to add a house model
+public:
+    void add_house(const std::string& objPath, const glm::vec3& position, const glm::vec3& scale = glm::vec3(1.0f));
+
+private:
+    // Flat terrain resources
+    GLuint flatVAO_ = 0;
+    GLuint flatVBO_ = 0;
+    GLuint flatEBO_ = 0;
+    GLuint flatTex_ = 0;
+    bool hasFlat_ = false;
 };
