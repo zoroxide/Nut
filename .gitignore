@@ -6,6 +6,8 @@ Engine/build/
 .DS_Store
 build/
 
+imgui.ini
+
 *.exe
 *.dll
 *.so
