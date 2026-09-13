@@ -16,7 +16,8 @@ Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image 
 
 # Demo Code
 use you own textures and Panoramas (png and HDR)
-```
+
+```cpp
 #include "Engine/Engine.h"
 #include <iostream>
 
