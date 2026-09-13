@@ -28,10 +28,10 @@ int main() {
     }
 
     // Load terrain texture
-    engine.load_terrain_using_texture("assets/grass.png");
+    engine.load_terrain_using_texture("assets/textures/grass.png");
 
     // Load panorama texture (optional)
-    if (!engine.panorama("assets/citrus_orchard_puresky_4k.hdr")) {
+    if (!engine.panorama("assets/skybox/sky_17_2k.png")) {
         std::cerr << "Failed to load panorama texture\n";
     }
 
@@ -50,6 +50,7 @@ int main() {
 - **WASD** for moving
 - **SPACE_BAR** for jumping
 - **Mouse** cursor for Looking
+- **Enter** for Free mouse to use GUI Controlls
   
 # Installing Requirements:
 

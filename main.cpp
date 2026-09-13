@@ -1,21 +1,27 @@
 #include "Engine/Engine.h"
 #include <iostream>
 
-using namespace std;
-
 int main() {
     Engine engine;
 
+    // Initialize the engine (fullscreen by default). If you want windowed, pass false.
     if (!engine.init(true)) {
-        cerr << "Failed to initialize engine\n";
+        std::cerr << "Failed to initialize engine\n";
         return -1;
     }
 
+    // Load terrain texture
     engine.load_terrain_using_texture("assets/textures/grass.png");
-    // engine.load_flat_terrain("assets/textures/grass.png");
 
+    // Load panorama texture (optional)
+    if (!engine.panorama("assets/skybox/sky_17_2k.png")) {
+        std::cerr << "Failed to load panorama texture\n";
+    }
+
+    // Toggle vsync if desired
     engine.vsync(true);
 
+    // Enter the engine main loop
     engine.mainloop();
 
     return 0;
