@@ -57,11 +57,12 @@ int main() {
 ```
 sudo apt update
 sudo apt install -y build-essential g++ cmake pkg-config git make cmake
-sudo apt install -y libglfw3-dev libglew-dev libglm-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev
+sudo apt install -y libglfw3-dev libglew-dev libglm-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev libassimp-dev
+
 ```
 
 ### compile and run: 
 ```
-make run
+sudo make run
 ```
 

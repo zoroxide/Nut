@@ -1,6 +1,8 @@
 #include "Engine.h"
 #include "gui/gui.h"
 
+#define GLM_ENABLE_EXPERIMENTAL
+
 // GLMs
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
