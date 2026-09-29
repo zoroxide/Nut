@@ -16,8 +16,9 @@ void main() {
 
     // Use only the rotational part of the inverse view to avoid camera translation
     // affecting the sky (no parallax). mat3(invView) extracts rotation.
-    vec3 worldDir = mat3(invView) * eye.xyz;
-    vDir = normalize(worldDir);
+    // Do NOT normalize here: the unnormalized ray is linear across the screen, so it
+    // interpolates correctly; normalizing per vertex warps the sky. The fragment shader normalizes.
+    vDir = mat3(invView) * eye.xyz;
 
     // we still must output a clip position
     gl_Position = vec4(aPos, 0.0, 1.0);

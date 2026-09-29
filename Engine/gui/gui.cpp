@@ -8,6 +8,9 @@
 #include <GLFW/glfw3.h>
 #include <iostream>
 #include <cstring>
+#include <algorithm>
+#include <filesystem>
+#include <vector>
 
 GUI::GUI(Engine* engine) : engine_(engine), window_(nullptr), initialized_(false) {}
 
@@ -44,6 +47,95 @@ bool GUI::init(GLFWwindow* window) {
     return true;
 }
 
+// Lists loadable skies: equirect images in assets/panoramas + assets/skybox, and cube-face folders
+static std::vector<std::string> scanSkies() {
+    namespace fs = std::filesystem;
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (const char* dir : {"assets/panoramas", "assets/skybox"}) {
+        for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+            const fs::path& p = it->path();
+            std::string ext = p.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (it->is_directory(ec)) {
+                if (fs::exists(p / "right.png", ec) || fs::exists(p / "right.bmp", ec) || fs::exists(p / "right.jpg", ec))
+                    out.push_back(p.string());
+            } else if (ext == ".hdr" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp") {
+                // Skip helper images that are not panoramas
+                std::string name = p.filename().string();
+                if (name.find("UV") != std::string::npos || name == "pz.png") continue;
+                out.push_back(p.string());
+            }
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+void GUI::drawSkyPanel() {
+    if (!ImGui::CollapsingHeader("Sky / Panorama", ImGuiTreeNodeFlags_DefaultOpen)) return;
+
+    static std::vector<std::string> skies = scanSkies();
+    static int selected = -1;
+    const std::string& current = engine_->getPanoramaPath();
+    if (selected < 0) {
+        for (size_t i = 0; i < skies.size(); ++i) if (skies[i] == current) selected = (int)i;
+    }
+
+    auto label = [](const std::string& p) { return std::filesystem::path(p).filename().string(); };
+    std::string preview = selected >= 0 && selected < (int)skies.size() ? label(skies[selected])
+                        : (current.empty() ? std::string("Procedural sky") : label(current));
+    if (ImGui::BeginCombo("Sky", preview.c_str())) {
+        if (ImGui::Selectable("Procedural sky", current.empty())) { engine_->panorama(""); selected = -1; }
+        for (size_t i = 0; i < skies.size(); ++i) {
+            bool isSel = (int)i == selected;
+            if (ImGui::Selectable(label(skies[i]).c_str(), isSel)) {
+                if (engine_->panorama(skies[i])) selected = (int)i;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", skies[i].c_str());
+            if (isSel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Rescan")) { skies = scanSkies(); selected = -1; }
+
+    // Manual path (folder with right/left/top/bottom/front/back, or a single equirect image)
+    static char pbuf[512] = "";
+    ImGui::InputTextWithHint("##skypath", "custom path (.hdr/.png/.jpg or cube-face folder)", pbuf, sizeof(pbuf));
+    ImGui::SameLine();
+    if (ImGui::Button("Load")) {
+        if (engine_->panorama(pbuf)) selected = -1;
+    }
+
+    Skybox& sky = engine_->sky();
+    if (sky.hasCubemap()) {
+        ImGui::TextDisabled("%s panorama%s", sky.isHDR() ? "HDR" : "LDR",
+                            sky.analysis().hasSun ? " - sun detected" : "");
+        ImGui::SliderFloat("Exposure", &sky.exposure, 0.02f, 8.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Auto")) sky.exposure = sky.analysis().autoExposure;
+        ImGui::SliderFloat("Rotation", &sky.rotationDeg, 0.0f, 360.0f, "%.0f deg");
+        ImGui::SliderFloat("Blur", &sky.blur, 0.0f, 6.0f);
+        ImGui::Checkbox("Sun & light from sky", &engine_->sunFromSky());
+        ImGui::SameLine();
+        ImGui::Checkbox("Fog from sky", &engine_->fogFromSky());
+    }
+    ImGui::Checkbox("Fill below horizon", &sky.horizonFill);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hide the panorama's floor behind the horizon haze");
+
+    bool ce = engine_->getCloudEnabled();
+    if (ImGui::Checkbox("Procedural Clouds", &ce)) engine_->setCloudEnabled(ce);
+    if (ce) {
+        float cs = engine_->getCloudSpeed();
+        if (ImGui::SliderFloat("Cloud Speed", &cs, 0.0f, 0.5f)) engine_->setCloudSpeed(cs);
+        float csc = engine_->getCloudScale();
+        if (ImGui::SliderFloat("Cloud Scale", &csc, 0.2f, 4.0f)) engine_->setCloudScale(csc);
+        float cop = engine_->getCloudOpacity();
+        if (ImGui::SliderFloat("Cloud Opacity", &cop, 0.0f, 1.0f)) engine_->setCloudOpacity(cop);
+    }
+}
+
 void GUI::drawTerrainPanel() {
     TerrainParams& P = engine_->terrainParams();
     static bool autoRegen = false;
@@ -77,8 +169,14 @@ void GUI::drawTerrainPanel() {
         changed |= ImGui::SliderFloat("Height Curve", &P.heightPower, 0.5f, 3.5f);
         changed |= ImGui::SliderFloat("Terracing", &P.terraceStrength, 0.0f, 1.0f);
         changed |= ImGui::SliderInt("Terrace Steps", &P.terraceSteps, 2, 20);
-        changed |= ImGui::SliderFloat("Island Falloff", &P.islandStrength, 0.0f, 1.0f);
-        changed |= ImGui::SliderFloat("Island Radius", &P.islandRadius, 0.1f, 0.95f);
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNodeEx("Island", ImGuiTreeNodeFlags_DefaultOpen)) {
+        changed |= ImGui::SliderFloat("Island Strength", &P.islandStrength, 0.0f, 1.0f);
+        changed |= ImGui::SliderFloat("Island Size", &P.islandRadius, 0.1f, 0.6f);
+        changed |= ImGui::SliderFloat("Coastline Roughness", &P.coastNoise, 0.0f, 1.5f);
+        changed |= ImGui::SliderFloat("Ocean Depth", &P.seaDepth, 0.05f, 0.5f);
+        changed |= ImGui::Checkbox("No Lakes (fill inland basins)", &P.fillLakes);
         ImGui::TreePop();
     }
     if (ImGui::TreeNode("Erosion")) {
@@ -88,9 +186,15 @@ void GUI::drawTerrainPanel() {
         changed |= ImGui::SliderInt("Thermal Passes", &P.thermalIterations, 0, 30);
         ImGui::TreePop();
     }
-    if (ImGui::TreeNode("Water")) {
-        changed |= ImGui::Checkbox("Enable Water", &P.waterEnabled);
-        changed |= ImGui::SliderFloat("Water Level", &P.waterLevel, 0.0f, 0.9f);
+    if (ImGui::TreeNode("Ocean")) {
+        changed |= ImGui::Checkbox("Enable Ocean", &P.waterEnabled);
+        changed |= ImGui::SliderFloat("Sea Level", &P.waterLevel, 0.0f, 0.9f);
+        // Waves update live (no regeneration needed)
+        ImGui::SliderFloat("Wave Height (m)", &P.waveHeight, 0.0f, 3.0f);
+        ImGui::SliderFloat("Wave Length (m)", &P.waveLength, 8.0f, 120.0f);
+        ImGui::SliderFloat("Choppiness", &P.choppiness, 0.0f, 1.0f);
+        ImGui::SliderFloat("Wind Direction", &P.windAngle, 0.0f, 360.0f, "%.0f deg");
+        ImGui::SliderFloat("Wave Speed", &P.waveSpeed, 0.0f, 3.0f);
         ImGui::SliderFloat("Water Opacity", &P.waterOpacity, 0.2f, 1.0f);
         ImGui::ColorEdit3("Shallow Color", &P.waterShallow.x);
         ImGui::ColorEdit3("Deep Color", &P.waterDeep.x);
@@ -101,10 +205,11 @@ void GUI::drawTerrainPanel() {
         ImGui::SliderFloat("Rock Slope", &P.rockSlope, 0.05f, 0.9f);
         ImGui::SliderFloat("Snow Line", &P.snowLine, 0.2f, 1.2f);
         ImGui::SliderFloat("Snow Blend", &P.snowBlend, 0.01f, 0.4f);
-        ImGui::ColorEdit3("Grass Tint", &P.grassTint.x);
-        ImGui::ColorEdit3("Sand", &P.sandColor.x);
-        ImGui::ColorEdit3("Rock", &P.rockColor.x);
-        ImGui::ColorEdit3("Snow", &P.snowColor.x);
+        ImGui::SliderFloat("Texture Scale", &P.textureScale, 0.3f, 4.0f);
+        ImGui::ColorEdit3("Grass Tint", &P.grassTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+        ImGui::ColorEdit3("Sand Tint", &P.sandTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+        ImGui::ColorEdit3("Rock Tint", &P.rockTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+        ImGui::ColorEdit3("Snow Tint", &P.snowTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
         ImGui::TreePop();
     }
     if (ImGui::TreeNode("Atmosphere")) {
@@ -130,12 +235,22 @@ void GUI::render() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // HUD: top-left coin counter
-    {
+    // HUD: swimming status and oxygen (only shown in the water)
+    if (engine_->isSwimming() || engine_->getOxygen() < 0.999f) {
         ImGui::SetNextWindowPos(ImVec2(10,10), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.35f);
         ImGui::Begin("HUD", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
-    ImGui::Text("Coins: %d", engine_->getCoinsCollected());
+        if (engine_->isSwimming()) {
+            ImGui::TextColored(ImVec4(0.5f, 0.85f, 1.0f, 1.0f), engine_->isUnderwater() ? "Diving" : "Swimming");
+            ImGui::TextDisabled("C/Ctrl dive - Space up - look down + W to dive");
+        }
+        float o2 = engine_->getOxygen();
+        if (o2 < 0.999f || engine_->isUnderwater()) {
+            ImVec4 col = o2 > 0.3f ? ImVec4(0.35f, 0.75f, 1.0f, 1.0f) : ImVec4(1.0f, 0.35f, 0.3f, 1.0f);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, col);
+            ImGui::ProgressBar(o2, ImVec2(160, 0), "Oxygen");
+            ImGui::PopStyleColor();
+        }
         ImGui::End();
     }
 
@@ -160,18 +275,7 @@ void GUI::render() {
 
     ImGui::Separator();
 
-    // Skybox (folder with faces OR single equirectangular .png)
-    char pbuf[512];
-    std::string currentP = engine_->getPanoramaPath();
-    strncpy(pbuf, currentP.c_str(), sizeof(pbuf)); pbuf[sizeof(pbuf)-1] = '\0';
-
-    if (ImGui::InputText("Skybox Path (folder: right/left/top/bottom/front/back .png|.bmp OR single equirectangular .png|.bmp)", pbuf, sizeof(pbuf))) {
-        engine_->setPanoramaPath(std::string(pbuf));
-    }
-
-    if (ImGui::Button("Load Skybox")) {
-        engine_->panorama(engine_->getPanoramaPath());
-    }
+    drawSkyPanel();
 
     ImGui::Separator();
 
@@ -220,19 +324,6 @@ void GUI::render() {
 
     float tt = engine_->getTextureTile();
     if (ImGui::InputFloat("Texture Tile", &tt)) engine_->setTextureTile(tt);
-
-    // Cloud controls
-    bool ce = engine_->getCloudEnabled();
-    if (ImGui::Checkbox("Enable Clouds", &ce)) engine_->setCloudEnabled(ce);
-
-    float cs = engine_->getCloudSpeed();
-    if (ImGui::SliderFloat("Cloud Speed", &cs, 0.0f, 0.5f)) engine_->setCloudSpeed(cs);
-
-    float csc = engine_->getCloudScale();
-    if (ImGui::SliderFloat("Cloud Scale", &csc, 0.2f, 4.0f)) engine_->setCloudScale(csc);
-
-    float cop = engine_->getCloudOpacity();
-    if (ImGui::SliderFloat("Cloud Opacity", &cop, 0.0f, 1.0f)) engine_->setCloudOpacity(cop);
 
     drawTerrainPanel();
 

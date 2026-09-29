@@ -12,7 +12,6 @@ SRC = main.cpp \
       Engine/Models.cpp \
       Engine/Renderer.cpp \
       Engine/gui/gui.cpp \
-      Engine/Coins.cpp \
       Engine/libs/stb_image.cpp \
       Engine/libs/imgui/imgui.cpp \
       Engine/libs/imgui/imgui_draw.cpp \

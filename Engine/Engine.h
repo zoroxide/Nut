@@ -1,4 +1,3 @@
-#include "Coins.h"
 #pragma once
 
 #include <GL/glew.h>
@@ -24,7 +23,6 @@ using Clock = std::chrono::high_resolution_clock;
 
 class Engine {
 public:
-    int getCoinsCollected() const { return coinsCollected_; }
     Engine();
     ~Engine();
 
@@ -48,6 +46,7 @@ private:
     // Internal state (opaque to users)
     GLFWwindow* window_;
     GLuint shaderProgram_;
+    GLuint waterShader_ = 0;
 
     // Sky renderer
     GLuint skyShader_;
@@ -108,7 +107,6 @@ private:
     Terrain terrain_;
     Models models_;
     Renderer renderer_;
-    Coins coins_;
 
     // Configurable constants (moved from macros to members so we can change them at runtime)
     int terrainSize_;
@@ -126,7 +124,16 @@ private:
     float cloudSpeed_;
     float cloudScale_;
     float cloudOpacity_;
-    int coinsCollected_ = 0;
+    bool sunFromSky_ = true;
+
+    // Swimming state
+    bool swimming_ = false;
+    bool underwater_ = false;
+    float oxygen_ = 1.0f;        // 0..1, drains while the head is under water
+    float swimTime_ = 0.0f;      // running time used for the waves
+    void setPerFrameUniforms(GLuint prog, const glm::vec3& lightDir, const glm::vec3& lightCol,
+                             const glm::vec3& uwColor);
+    bool fogFromSky_ = true;
 
 
 public: // Public API
@@ -138,7 +145,7 @@ public: // Public API
 
     // Regenerate terrain mesh with current constants
     void regenerateTerrain();
-    void respawnCoins();
+    void placePlayerOnLand();
 
     // Getters / setters for configurable constants and file paths
     int getTerrainSize() const;
@@ -153,6 +160,16 @@ public: // Public API
     // Full procedural-generation settings (edited live by the GUI)
     TerrainParams& terrainParams() { return terrainParams_; }
     float getWaterY() const { return terrain_.getWaterY(); }
+
+    // Sky / panorama settings (exposure, rotation, blur live on the Skybox)
+    Skybox& sky() { return sky_; }
+    bool& sunFromSky() { return sunFromSky_; }
+    bool& fogFromSky() { return fogFromSky_; }
+
+    // Player / swimming status for the HUD
+    bool isSwimming() const { return swimming_; }
+    bool isUnderwater() const { return underwater_; }
+    float getOxygen() const { return oxygen_; }
 
     // File path accessors
     const std::string& getPanoramaPath() const;

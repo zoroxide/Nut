@@ -30,11 +30,8 @@ int main() {
         return -1;
     }
 
-    // Load terrain texture
-    engine.load_terrain_using_texture("assets/textures/grass.png");
-
-    // Load panorama texture (optional)
-    if (!engine.panorama("assets/skybox/sky_17_2k.png")) {
+    // Load panorama (optional). HDR panoramas also drive the sun direction, colour and fog.
+    if (!engine.panorama("assets/panoramas/kloofendal_48d_partly_cloudy_puresky_4k.hdr")) {
         std::cerr << "Failed to load panorama texture\n";
     }
 
@@ -50,10 +47,20 @@ int main() {
 ```
 
 # Controls
-- **WASD** for moving
-- **SPACE_BAR** for jumping
+- **WASD** for moving (**Shift** to sprint / swim faster)
+- **SPACE_BAR** for jumping (swim up while in the water)
+- **C** or **Ctrl** to dive while swimming (or look down and press **W**)
 - **Mouse** cursor for Looking
 - **Enter** for Free mouse to use GUI Controlls
+
+# World
+- A procedurally generated island (hills, mountains, beaches, no lakes) surrounded by an ocean
+- Ocean with Gerstner waves: walk into the sea to swim, dive to explore the sea floor,
+  and keep an eye on your oxygen
+- Terrain presets, island shape, waves, materials, sky and fog are all tweakable in the GUI
+
+# Assets
+HDRI skies (`assets/panoramas`) and terrain materials (`assets/textures/terrain`) are CC0 from [Poly Haven](https://polyhaven.com).
   
 # Installing Requirements:
 

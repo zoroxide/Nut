@@ -10,11 +10,13 @@ int main() {
         return -1;
     }
 
-    // Load terrain texture
-    engine.load_terrain_using_texture("assets/textures/grass.png");
+    // Ground materials (grass/rock/sand/snow) load automatically from assets/textures/terrain.
+    // To force your own grass texture instead:
+    // engine.load_terrain_using_texture("assets/textures/grass.png");
 
-    // Load panorama texture (optional)
-    if (!engine.panorama("assets/skybox/sky_17_2k.png")) {
+    // Load panorama (optional). HDR panoramas also drive the sun direction, colour and fog.
+    if (!engine.panorama("assets/panoramas/kloofendal_48d_partly_cloudy_puresky_4k.hdr") &&
+        !engine.panorama("assets/skybox/sky_17_2k.png")) {
         std::cerr << "Failed to load panorama texture\n";
     }
 

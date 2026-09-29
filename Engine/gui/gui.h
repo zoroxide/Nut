@@ -25,6 +25,7 @@ public:
 
 private:
     void drawTerrainPanel();
+    void drawSkyPanel();
     Engine* engine_;
     GLFWwindow* window_;
     bool initialized_;

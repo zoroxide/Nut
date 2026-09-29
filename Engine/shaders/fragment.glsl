@@ -5,35 +5,49 @@ in vec3 FragPos;
 in vec3 Normal;
 in vec2 TexCoords;
 
-uniform sampler2D texture1;
-uniform sampler2D heightTex;
+uniform sampler2D texture1;         // models, or a custom grass texture for the terrain
+uniform sampler2DArray matAlbedo;   // 0 grass, 1 grass2, 2 rock, 3 sand, 4 snow
+uniform sampler2DArray matNormal;
+uniform int hasMaterials;
+uniform int customGrass;
+
 uniform vec3 lightDir;
 uniform vec3 lightColor;
 uniform vec3 viewPos;
 uniform int useSolidColor;
 uniform vec3 solidColor;
-uniform bool renderSky;
+uniform float time;
 
 uniform vec3 fogColor;
 uniform float fogDensity;
 
-// 0 = plain (models, coins), 1 = procedural terrain, 2 = water
+// 0 = plain (models), 1 = procedural terrain
 uniform int shadeMode;
 uniform float waterY;
 uniform float beachWidth;
 uniform float rockSlope;
 uniform float snowLine;
 uniform float snowBlend;
+uniform float texScale;
 uniform vec3 grassTint;
-uniform vec3 sandColor;
-uniform vec3 rockColor;
-uniform vec3 snowColor;
-
-uniform float time;
-uniform float terrainHalf;
-uniform float waterOpacity;
+uniform vec3 sandTint;
+uniform vec3 rockTint;
+uniform vec3 snowTint;
 uniform vec3 waterShallow;
 uniform vec3 waterDeep;
+
+// Camera below the ocean surface: everything is seen through water
+uniform int underwater;
+uniform vec3 uwColor;
+
+// Panorama (optional): used for fog colour and ambient light
+uniform samplerCube skyTex;
+uniform int hasSky;
+uniform mat3 skyRot;
+uniform float skyExposure;
+uniform int skyHDR;
+uniform float skyMaxLod;
+uniform int fogFromSky;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vnoise(vec2 p) {
@@ -48,9 +62,146 @@ float fbm(vec2 p) {
     return v;
 }
 
-vec3 applyFog(vec3 color, float dist) {
+vec3 aces(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+// Sky radiance in direction d, converted to display colour exactly like the sky shader
+vec3 skyColor(vec3 d, float lod) {
+    vec3 c = textureLod(skyTex, skyRot * d, lod).rgb * skyExposure;
+    if (skyHDR == 1) c = aces(c);
+    return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+}
+
+vec3 applyFog(vec3 color, float dist, vec3 rayDir) {
+    if (underwater == 1) {
+        // Light is absorbed quickly under water: strong blue-green fog
+        float f = 1.0 - exp(-dist * 0.035);
+        return mix(color * vec3(0.6, 0.9, 1.0), uwColor, f);
+    }
     float f = 1.0 - exp(-pow(fogDensity * dist, 2.0));
-    return mix(color, fogColor, clamp(f, 0.0, 1.0));
+    vec3 fc = fogColor;
+    if (hasSky == 1 && fogFromSky == 1) {
+        // Fog takes the colour of the sky just above the horizon behind the object,
+        // so distant terrain melts into the panorama instead of ending in a hard line
+        vec3 d = normalize(vec3(rayDir.x, 0.04 + max(rayDir.y, 0.0) * 0.5, rayDir.z));
+        fc = skyColor(d, max(skyMaxLod - 4.0, 0.0));
+    }
+    return mix(color, fc, clamp(f, 0.0, 1.0));
+}
+
+// Animated caustic web (light focused by the waves onto the sea floor)
+float caustics(vec2 p, float t) {
+    vec2 i = p * 0.35;
+    vec2 q = i;
+    float c = 1.0;
+    const float inten = 0.005;
+    for (int n = 0; n < 4; n++) {
+        float tt = t * 0.6 * (1.0 - (3.5 / float(n + 1)));
+        q = i + vec2(cos(tt - q.x) + sin(tt + q.y), sin(tt - q.y) + cos(tt + q.x));
+        c += 1.0 / length(vec2(i.x / (sin(q.x + tt) / inten), i.y / (cos(q.y + tt) / inten)));
+    }
+    c /= 4.0;
+    c = 1.17 - pow(c, 1.4);
+    return clamp(pow(abs(c), 8.0), 0.0, 1.0);
+}
+
+// --- Material sampling ---
+// Top-down projection with a whiteout-blended normal map
+void sampleTop(int layer, vec2 uv, vec3 N, out vec3 albedo, out vec3 n) {
+    albedo = texture(matAlbedo, vec3(uv, layer)).rgb;
+    vec3 t = texture(matNormal, vec3(uv, layer)).xyz * 2.0 - 1.0;
+    n = normalize(vec3(t.x + N.x, abs(t.z) * N.y, t.y + N.z));
+}
+// Triplanar projection for cliffs (no stretching on steep faces)
+void sampleTriplanar(int layer, vec3 p, vec3 N, out vec3 albedo, out vec3 n) {
+    vec3 w = pow(abs(N), vec3(4.0));
+    w /= (w.x + w.y + w.z);
+    albedo = texture(matAlbedo, vec3(p.zy, layer)).rgb * w.x
+           + texture(matAlbedo, vec3(p.xz, layer)).rgb * w.y
+           + texture(matAlbedo, vec3(p.xy, layer)).rgb * w.z;
+    vec3 tx = texture(matNormal, vec3(p.zy, layer)).xyz * 2.0 - 1.0;
+    vec3 ty = texture(matNormal, vec3(p.xz, layer)).xyz * 2.0 - 1.0;
+    vec3 tz = texture(matNormal, vec3(p.xy, layer)).xyz * 2.0 - 1.0;
+    tx = vec3(tx.xy + N.zy, abs(tx.z) * N.x);
+    ty = vec3(ty.xy + N.xz, abs(ty.z) * N.y);
+    tz = vec3(tz.xy + N.xy, abs(tz.z) * N.z);
+    n = normalize(tx.zyx * w.x + ty.xzy * w.y + tz.xyz * w.z);
+}
+
+vec3 terrainColor(vec3 N, vec3 viewDir, float dist, vec3 light) {
+    vec3 P = FragPos;
+    float slope = 1.0 - N.y;
+    float macro = fbm(P.xz * 0.015);
+    float mid = fbm(P.xz * 0.12);
+
+    // Layer weights
+    float wRock = smoothstep(rockSlope, rockSlope + 0.12, slope + (mid - 0.5) * 0.12);
+    float wSand = 1.0 - smoothstep(waterY + beachWidth * 0.3, waterY + beachWidth + (mid - 0.5) * beachWidth, P.y);
+    wSand *= 1.0 - wRock * 0.8;
+    float wSnow = smoothstep(snowLine, snowLine + snowBlend, P.y + (mid - 0.5) * snowBlend - slope * snowBlend * 1.2);
+    wSnow *= 1.0 - smoothstep(0.35, 0.7, slope);
+    float wGrass2 = smoothstep(0.52, 0.72, macro) * 0.75;   // patches of drier, leafy ground
+
+    vec3 albedo, n;
+    if (hasMaterials == 1) {
+        vec2 uvG = P.xz * (0.16 * texScale);
+        vec2 uvS = P.xz * (0.2 * texScale);
+        vec3 aG, nG, aG2, nG2, aR, nR, aS, nS, aSn, nSn;
+        if (customGrass == 1) { aG = texture(texture1, uvG).rgb; nG = N; }
+        else sampleTop(0, uvG, N, aG, nG);
+        // A second, larger-scale sample breaks up visible tiling in the distance
+        vec3 aFar = texture(matAlbedo, vec3(uvG * 0.13 + 0.37, 0)).rgb;
+        aG = mix(aG, aG * aFar * 2.2, 0.35 + 0.3 * smoothstep(20.0, 120.0, dist));
+        sampleTop(1, uvG * 0.8, N, aG2, nG2);
+        albedo = mix(aG, aG2, wGrass2) * grassTint;
+        n = normalize(mix(nG, nG2, wGrass2));
+        if (wSand > 0.001) {
+            sampleTop(3, uvS, N, aS, nS);
+            albedo = mix(albedo, aS * sandTint, wSand); n = normalize(mix(n, nS, wSand));
+        }
+        if (wRock > 0.001) {
+            sampleTriplanar(2, P * (0.09 * texScale), N, aR, nR);
+            albedo = mix(albedo, aR * rockTint, wRock); n = normalize(mix(n, nR, wRock));
+        }
+        if (wSnow > 0.001) {
+            sampleTop(4, uvS * 0.6, N, aSn, nSn);
+            albedo = mix(albedo, aSn * snowTint, wSnow); n = normalize(mix(n, nSn, wSnow));
+        }
+    } else {
+        // Fallback: flat colours when the material textures are missing
+        vec3 grass = (customGrass == 1 ? texture(texture1, TexCoords).rgb : vec3(0.30, 0.45, 0.18)) * grassTint;
+        albedo = mix(grass, vec3(0.8, 0.72, 0.5) * sandTint, wSand);
+        albedo = mix(albedo, vec3(0.42, 0.38, 0.35) * rockTint * (0.7 + 0.6 * mid), wRock);
+        albedo = mix(albedo, vec3(0.95, 0.97, 1.0) * snowTint, wSnow);
+        n = N;
+    }
+    albedo *= 0.85 + 0.3 * macro;
+    // Wet sand darkens near the waterline; the sea floor takes on the water's colour with depth
+    albedo *= mix(0.6, 1.0, smoothstep(waterY - 0.3, waterY + 0.5, P.y));
+    float depthBelow = waterY - P.y;
+    if (depthBelow > 0.0) albedo = mix(albedo, albedo * waterShallow * 1.6, clamp(depthBelow / 8.0, 0.0, 0.8));
+
+    // Lighting: sky ambient + soft wrapped sun
+    vec3 skyAmb = vec3(0.50, 0.62, 0.80), groundAmb = vec3(0.28, 0.24, 0.20);
+    if (hasSky == 1) {
+        skyAmb = skyColor(normalize(n + vec3(0.0, 0.6, 0.0)), max(skyMaxLod - 1.0, 0.0)) * 0.9;
+        groundAmb = skyAmb * vec3(0.55, 0.48, 0.40);
+    }
+    vec3 amb = mix(groundAmb, skyAmb, n.y * 0.5 + 0.5) * 0.55;
+    float diff = max(dot(n, light), 0.0);
+    float wrap = clamp((dot(n, light) + 0.25) / 1.25, 0.0, 1.0);
+    // Shade from the smooth mesh normal too so the big shapes stay readable
+    float macroShade = mix(0.75, 1.0, clamp(dot(N, light) * 0.5 + 0.5, 0.0, 1.0));
+    vec3 lit = (amb + lightColor * (0.55 * diff + 0.45 * wrap * wrap) * macroShade) * albedo;
+    float spec = pow(max(dot(viewDir, reflect(-light, n)), 0.0), 32.0);
+    lit += lightColor * spec * (0.25 * wSnow + 0.12 * wSand * (1.0 - smoothstep(waterY, waterY + 0.6, P.y)));
+
+    if (depthBelow > 0.0) {
+        float c = caustics(P.xz, time) * exp(-depthBelow * 0.12) * max(dot(N, light), 0.0);
+        lit += lightColor * c * 1.3;
+    }
+    return lit;
 }
 
 void main() {
@@ -58,97 +209,18 @@ void main() {
     vec3 viewVec = viewPos - FragPos;
     float dist = length(viewVec);
     vec3 viewDir = viewVec / dist;
-
-    if (shadeMode == 2) {
-        // ---- Water ----
-        vec2 p = FragPos.xz;
-        // Two scrolling noise layers give a cheap animated normal
-        vec2 w1 = vec2(fbm(p * 0.35 + time * 0.10), fbm(p * 0.35 - time * 0.08 + 17.0));
-        vec2 w2 = vec2(fbm(p * 1.10 - time * 0.22 + 3.0), fbm(p * 1.10 + time * 0.19 + 9.0));
-        vec2 d = (w1 - 0.5) * 0.35 + (w2 - 0.5) * 0.18;
-        vec3 n = normalize(vec3(d.x, 1.0, d.y));
-
-        // Water depth from the terrain height map
-        vec2 huv = FragPos.xz / (2.0 * terrainHalf) + 0.5;
-        float depth = 100.0;
-        if (huv.x > 0.0 && huv.x < 1.0 && huv.y > 0.0 && huv.y < 1.0)
-            depth = waterY - texture(heightTex, huv).r;
-        float shore = clamp(depth, 0.0, 100.0);
-
-        vec3 col = mix(waterShallow, waterDeep, smoothstep(0.0, 5.0, shore));
-        float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 4.0);
-        vec3 sky = mix(fogColor, vec3(0.45, 0.65, 0.95), 0.5);
-        col = mix(col, sky, clamp(0.08 + fres * 0.85, 0.0, 1.0));
-
-        vec3 refl = reflect(-light, n);
-        col += lightColor * pow(max(dot(viewDir, refl), 0.0), 120.0) * 1.2;
-
-        // Shoreline foam
-        float foamEdge = 0.55 + 0.25 * sin(time * 1.2 + p.x * 0.5 + p.y * 0.4);
-        float foam = (1.0 - smoothstep(0.0, foamEdge, shore)) * smoothstep(0.35, 0.75, fbm(p * 2.5 + time * 0.3));
-        col = mix(col, vec3(1.0), clamp(foam, 0.0, 1.0) * 0.85);
-
-        float alpha = clamp(waterOpacity * smoothstep(0.0, 0.4, shore) + foam * 0.6, 0.0, 1.0);
-        alpha = max(alpha, fres * 0.6 * step(0.0, shore));
-        FragColor = vec4(applyFog(col, dist), alpha);
-        return;
-    }
-
     vec3 norm = normalize(Normal);
-    float diff = max(dot(norm, light), 0.0);
 
     if (shadeMode == 1) {
-        // ---- Procedural terrain: material blend by height and slope ----
-        float slope = 1.0 - norm.y;
-        float n1 = fbm(FragPos.xz * 0.15);
-        float n2 = vnoise(FragPos.xz * 1.7);
-
-        // Break up texture tiling with a second, larger, offset sample
-        vec3 grass = texture(texture1, TexCoords).rgb;
-        vec3 grassFar = texture(texture1, TexCoords * 0.173 + 0.31).rgb;
-        grass = grass * mix(vec3(1.0), grassFar * 1.6, 0.45) * grassTint;
-        grass *= 0.8 + 0.4 * n1;
-
-        vec3 rock = rockColor * (0.65 + 0.7 * fbm(FragPos.xz * 0.6 + FragPos.y * 0.3));
-        float rockMask = smoothstep(rockSlope, rockSlope + 0.14, slope + (n1 - 0.5) * 0.12);
-
-        vec3 sand = sandColor * (0.9 + 0.2 * n2);
-        float sandMask = 1.0 - smoothstep(waterY + beachWidth * 0.4, waterY + beachWidth + (n1 - 0.5) * beachWidth, FragPos.y);
-        sandMask *= 1.0 - rockMask * 0.8;
-
-        float snowMask = smoothstep(snowLine, snowLine + snowBlend, FragPos.y + (n1 - 0.5) * snowBlend - slope * snowBlend * 1.2);
-        snowMask *= 1.0 - smoothstep(0.35, 0.7, slope);
-
-        vec3 base = mix(grass, rock, rockMask);
-        base = mix(base, sand, sandMask);
-        base = mix(base, snowColor, snowMask);
-        // Wet ground darkens near the waterline
-        base *= mix(0.65, 1.0, smoothstep(waterY - 0.2, waterY + 0.6, FragPos.y));
-
-        vec3 skyAmb = vec3(0.50, 0.62, 0.80), groundAmb = vec3(0.28, 0.24, 0.20);
-        vec3 amb = mix(groundAmb, skyAmb, norm.y * 0.5 + 0.5) * 0.55;
-        // Soft wrap lighting keeps shaded slopes from going flat black
-        float wrap = clamp((dot(norm, light) + 0.25) / 1.25, 0.0, 1.0);
-        vec3 lit = (amb + lightColor * (0.55 * diff + 0.45 * wrap * wrap)) * base;
-        float spec = pow(max(dot(viewDir, reflect(-light, norm)), 0.0), 32.0);
-        lit += lightColor * spec * 0.25 * snowMask;
-        FragColor = vec4(applyFog(lit, dist), 1.0);
+        FragColor = vec4(applyFog(terrainColor(norm, viewDir, dist, light), dist, -viewDir), 1.0);
         return;
     }
 
-    // ---- Plain shading (models, coins) ----
-    vec3 diffuse = diff * lightColor;
+    // ---- Plain shading (models) ----
+    float diff = max(dot(norm, light), 0.0);
     vec3 reflectDir = reflect(-light, norm);
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
-    vec3 specular = 0.25 * spec * lightColor;
-
     vec3 baseColor = (useSolidColor == 1) ? solidColor : texture(texture1, TexCoords).rgb;
-    vec3 color = (0.25 + diffuse + specular) * baseColor;
-    color = applyFog(color, dist);
-
-    if (renderSky) {
-        float t = clamp(viewDir.y * 0.5 + 0.5, 0.0, 1.0);
-        color = mix(vec3(0.85, 0.95, 1.0), vec3(0.53, 0.8, 1.0), t);
-    }
-    FragColor = vec4(color, 1.0);
+    vec3 color = (0.25 + diff * lightColor) * baseColor + 0.25 * spec * lightColor;
+    FragColor = vec4(applyFog(color, dist, -viewDir), 1.0);
 }

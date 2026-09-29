@@ -6,6 +6,9 @@
 #include <random>
 #include <algorithm>
 #include <GLFW/glfw3.h>
+#include <thread>
+#include <cstdint>
+#include <iostream>
 #include "libs/stb_image.h"
 
 Terrain::~Terrain() {
@@ -18,6 +21,10 @@ Terrain::~Terrain() {
     if (flatTex_) glDeleteTextures(1, &flatTex_);
     if (heightTex_) glDeleteTextures(1, &heightTex_);
     if (waterVBO_) glDeleteBuffers(1, &waterVBO_);
+    if (waterEBO_) glDeleteBuffers(1, &waterEBO_);
+    if (matAlbedo_) glDeleteTextures(1, &matAlbedo_);
+    if (matNormal_) glDeleteTextures(1, &matNormal_);
+    if (procTexture_) glDeleteTextures(1, &procTexture_);
     if (waterVAO_) glDeleteVertexArrays(1, &waterVAO_);
 }
 
@@ -154,54 +161,180 @@ void Terrain::draw(GLuint shaderProgram, const glm::mat4& model, const glm::mat4
         auto U = [&](const char* n) { return glGetUniformLocation(shaderProgram, n); };
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, procTexture_);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, matAlbedo_);
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, matNormal_);
+        glActiveTexture(GL_TEXTURE0);
+        glUniform1i(U("matAlbedo"), 4);
+        glUniform1i(U("matNormal"), 5);
+        glUniform1i(U("hasMaterials"), matAlbedo_ ? 1 : 0);
+        glUniform1i(U("customGrass"), procTexture_ ? 1 : 0);
         glUniform1i(U("shadeMode"), 1);
         glUniform1f(U("waterY"), P.waterEnabled ? waterY_ : -1e9f);
         glUniform1f(U("beachWidth"), P.beachWidth * heightScale_);
         glUniform1f(U("rockSlope"), P.rockSlope);
         glUniform1f(U("snowLine"), P.snowLine * heightScale_);
         glUniform1f(U("snowBlend"), std::max(P.snowBlend * heightScale_, 0.01f));
+        glUniform1f(U("texScale"), 1.0f / std::max(P.textureScale, 0.05f));
         glUniform3fv(U("grassTint"), 1, &P.grassTint.x);
-        glUniform3fv(U("sandColor"), 1, &P.sandColor.x);
-        glUniform3fv(U("rockColor"), 1, &P.rockColor.x);
-        glUniform3fv(U("snowColor"), 1, &P.snowColor.x);
+        glUniform3fv(U("sandTint"), 1, &P.sandTint.x);
+        glUniform3fv(U("rockTint"), 1, &P.rockTint.x);
+        glUniform3fv(U("snowTint"), 1, &P.snowTint.x);
         glUniform3fv(U("fogColor"), 1, &P.fogColor.x);
         glUniform1f(U("fogDensity"), P.fogDensity);
+        glUniform3fv(U("waterShallow"), 1, &P.waterShallow.x);
+        glUniform3fv(U("waterDeep"), 1, &P.waterDeep.x);
         glUniformMatrix4fv(U("model"), 1, GL_FALSE, &model[0][0]);
         glUniformMatrix4fv(U("mvp"), 1, GL_FALSE, &(proj * view * model)[0][0]);
         glBindVertexArray(vao_);
         glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
-        if (P.waterEnabled) drawWater(shaderProgram, model, view, proj);
-        glUniform1i(U("shadeMode"), 0); // objects/coins drawn afterwards use plain shading
+        glUniform1i(U("shadeMode"), 0); // objects drawn afterwards use plain shading
     }
 }
 
-void Terrain::drawWater(GLuint shaderProgram, const glm::mat4& model, const glm::mat4& view, const glm::mat4& proj) {
-    if (!waterVAO_) return;
+// Wave set shared with water_vert.glsl (keep both in sync): direction offset from the
+// wind (radians), wavelength and amplitude relative to the main swell.
+static const int   kWaves = 5;
+static const float kWaveAng[kWaves] = { 0.0f, 0.55f, -0.45f, 1.05f, -1.2f };
+static const float kWaveLen[kWaves] = { 1.0f, 0.61f, 0.41f, 0.27f, 0.17f };
+static const float kWaveAmp[kWaves] = { 1.0f, 0.55f, 0.36f, 0.22f, 0.14f };
+
+float Terrain::getWaterSurfaceAt(float wx, float wz, float t) const {
+    if (!params_.waterEnabled) return -1e9f;
     const TerrainParams& P = params_;
-    auto U = [&](const char* n) { return glGetUniformLocation(shaderProgram, n); };
-    glm::mat4 M = glm::translate(model, glm::vec3(0.0f, waterY_, 0.0f));
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, heightTex_);
-    glActiveTexture(GL_TEXTURE0);
-    glUniform1i(U("heightTex"), 2);
-    glUniform1i(U("shadeMode"), 2);
-    glUniform1f(U("time"), (float)glfwGetTime());
-    glUniform1f(U("terrainHalf"), (size_ - 1) * 0.5f * scale_);
+    float half = getHalfExtent();
+    float depth = 100.0f;
+    if (std::fabs(wx) < half && std::fabs(wz) < half) depth = waterY_ - getHeightAt(wx, wz);
+    float atten = 0.12f + 0.88f * glm::smoothstep(0.0f, 10.0f, depth);
+    float a0 = P.waveHeight * 0.5f * atten;
+    float base = glm::radians(P.windAngle);
+    float y = waterY_;
+    for (int i = 0; i < kWaves; ++i) {
+        float ang = base + kWaveAng[i];
+        float L = std::max(P.waveLength * kWaveLen[i], 0.5f);
+        float k = 6.2831853f / L, c = std::sqrt(9.81f / k);
+        float f = k * (std::cos(ang) * wx + std::sin(ang) * wz - c * t * P.waveSpeed);
+        y += a0 * kWaveAmp[i] * std::sin(f);
+    }
+    return y;
+}
+
+// Camera-centred grid: dense near the middle, stretching to the horizon at the edges
+void Terrain::buildWaterGrid() {
+    const int N = 384;               // cells per side
+    const float inner = 48.0f;       // ~0.25 m spacing at the centre
+    const float R = 6000.0f;         // reaches far past the island
+    auto warp = [&](float u) { float a = std::fabs(u); return (u < 0 ? -1.0f : 1.0f) * (inner * a + (R - inner) * a * a * a); };
+    std::vector<float> v; v.reserve((size_t)(N + 1) * (N + 1) * 3);
+    for (int z = 0; z <= N; ++z) for (int x = 0; x <= N; ++x) {
+        v.push_back(warp(x * 2.0f / N - 1.0f)); v.push_back(0.0f); v.push_back(warp(z * 2.0f / N - 1.0f));
+    }
+    std::vector<unsigned> idx; idx.reserve((size_t)N * N * 6);
+    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
+        unsigned tl = z * (N + 1) + x, tr = tl + 1, bl = tl + N + 1, br = bl + 1;
+        idx.insert(idx.end(), { tl, bl, br, tl, br, tr });
+    }
+    glGenVertexArrays(1, &waterVAO_); glGenBuffers(1, &waterVBO_); glGenBuffers(1, &waterEBO_);
+    glBindVertexArray(waterVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, waterVBO_);
+    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, waterEBO_);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(unsigned), idx.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+    glBindVertexArray(0);
+    waterIndexCount_ = (GLsizei)idx.size();
+}
+
+void Terrain::drawWater(GLuint prog, const glm::mat4& view, const glm::mat4& proj, const glm::vec3& cameraPos, float time) {
+    if (!params_.waterEnabled || isFlat_ || heights_.empty()) return;
+    if (!waterVAO_) buildWaterGrid();
+    const TerrainParams& P = params_;
+    auto U = [&](const char* n) { return glGetUniformLocation(prog, n); };
+    glUseProgram(prog);
+    // Snap the grid origin so vertices don't slide over the waves as the camera moves
+    const float snap = 0.25f;
+    glm::vec2 origin = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / snap) * snap;
+    glm::mat4 VP = proj * view;
+    glUniformMatrix4fv(U("viewProj"), 1, GL_FALSE, &VP[0][0]);
+    glUniform2fv(U("gridOrigin"), 1, &origin.x);
+    glUniform3fv(U("viewPos"), 1, &cameraPos.x);
+    glUniform1f(U("time"), time);
+    glUniform1f(U("waterY"), waterY_);
+    glUniform1f(U("terrainHalf"), getHalfExtent());
+    glUniform1f(U("waveHeight"), P.waveHeight);
+    glUniform1f(U("waveLength"), P.waveLength);
+    glUniform1f(U("choppiness"), P.choppiness);
+    glUniform1f(U("windAngle"), glm::radians(P.windAngle));
+    glUniform1f(U("waveSpeed"), P.waveSpeed);
     glUniform1f(U("waterOpacity"), P.waterOpacity);
     glUniform3fv(U("waterShallow"), 1, &P.waterShallow.x);
     glUniform3fv(U("waterDeep"), 1, &P.waterDeep.x);
-    glUniformMatrix4fv(U("model"), 1, GL_FALSE, &M[0][0]);
-    glUniformMatrix4fv(U("mvp"), 1, GL_FALSE, &(proj * view * M)[0][0]);
+    glUniform3fv(U("fogColor"), 1, &P.fogColor.x);
+    glUniform1f(U("fogDensity"), P.fogDensity);
+    glUniform1i(U("heightTex"), 2);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, heightTex_);
+    glActiveTexture(GL_TEXTURE0);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
     glBindVertexArray(waterVAO_);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDrawElements(GL_TRIANGLES, waterIndexCount_, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 }
+
+bool Terrain::loadMaterials(const std::string& dir) {
+    static const char* names[5] = { "grass", "grass2", "rock", "sand", "snow" };
+    auto loadArray = [&](const char* suffix, GLuint& tex) -> bool {
+        std::vector<unsigned char*> imgs(5, nullptr);
+        int W = 0, H = 0; bool ok = true;
+        stbi_set_flip_vertically_on_load(false);
+        for (int i = 0; i < 5 && ok; ++i) {
+            int w = 0, h = 0, c = 0;
+            for (const char* ext : { ".jpg", ".png" }) {
+                std::string path = dir + "/" + names[i] + suffix + ext;
+                imgs[i] = stbi_load(path.c_str(), &w, &h, &c, 3);
+                if (imgs[i]) break;
+            }
+            if (!imgs[i] || (i > 0 && (w != W || h != H))) ok = false;
+            W = w; H = h;
+        }
+        if (ok) {
+            if (tex) glDeleteTextures(1, &tex);
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, W, H, 5, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+            for (int i = 0; i < 5; ++i)
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, W, H, 1, GL_RGB, GL_UNSIGNED_BYTE, imgs[i]);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            GLfloat maxAniso = 0.0f;
+            glGetFloatv(0x84FF /*GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT*/, &maxAniso);
+            if (maxAniso > 1.0f) glTexParameterf(GL_TEXTURE_2D_ARRAY, 0x84FE, glm::min(8.0f, maxAniso));
+        }
+        for (auto* p : imgs) if (p) stbi_image_free(p);
+        return ok;
+    };
+    bool ok = loadArray("_albedo", matAlbedo_) && loadArray("_normal", matNormal_);
+    if (!ok) {
+        std::cerr << "Terrain: could not load materials from " << dir << " (using flat colours)\n";
+        if (matAlbedo_) { glDeleteTextures(1, &matAlbedo_); matAlbedo_ = 0; }
+        if (matNormal_) { glDeleteTextures(1, &matNormal_); matNormal_ = 0; }
+    }
+    return ok;
+}
+
 // --- Presets ---
-static const char* kPresetNames[] = { "Mountains", "Rolling Hills", "Islands", "Plains", "Mesa / Canyons", "Alpine Peaks" };
+static const char* kPresetNames[] = { "Big Island", "Archipelago", "Mountains", "Rolling Hills", "Plains", "Mesa / Canyons", "Alpine Peaks" };
 
 const char* const* TerrainParams::presetNames(int& count) {
     count = (int)(sizeof(kPresetNames) / sizeof(kPresetNames[0]));
@@ -209,27 +342,28 @@ const char* const* TerrainParams::presetNames(int& count) {
 }
 
 TerrainParams TerrainParams::preset(int id) {
-    TerrainParams p; // defaults are the "Mountains" look
+    TerrainParams p; // defaults are the "Big Island" look
+    auto mainland = [&]() { p.islandStrength = 0.0f; p.waterLevel = 0.28f; p.frequency = 0.0045f; };
     switch (id) {
-    case 1: // Rolling hills
-        p.frequency = 0.003f; p.octaves = 5; p.ridgeAmount = 0.05f; p.warpStrength = 40.0f;
-        p.heightPower = 1.1f; p.waterLevel = 0.18f; p.snowLine = 2.0f; p.rockSlope = 0.45f;
-        p.erosionIterations = 40000; break;
-    case 2: // Islands
-        p.frequency = 0.006f; p.ridgeAmount = 0.35f; p.heightPower = 1.4f; p.islandStrength = 1.0f;
-        p.islandRadius = 0.35f; p.waterLevel = 0.28f; p.snowLine = 0.95f; p.beachWidth = 0.035f; break;
-    case 3: // Plains
-        p.frequency = 0.0025f; p.octaves = 4; p.ridgeAmount = 0.0f; p.warpStrength = 20.0f;
-        p.heightPower = 1.0f; p.waterLevel = 0.12f; p.snowLine = 3.0f; p.rockSlope = 0.6f;
-        p.erosionIterations = 20000; break;
-    case 4: // Mesa / canyons
-        p.frequency = 0.004f; p.ridgeAmount = 0.2f; p.heightPower = 1.3f; p.terraceStrength = 0.9f;
+    case 1: // Archipelago: many islands with channels between them
+        p.islandRadius = 0.30f; p.coastNoise = 1.3f; p.frequency = 0.005f; p.ridgeAmount = 0.45f;
+        p.waterLevel = 0.24f; p.beachWidth = 0.03f; break;
+    case 2: // Mountains
+        mainland(); p.ridgeAmount = 0.7f; p.heightPower = 1.6f; break;
+    case 3: // Rolling hills
+        mainland(); p.frequency = 0.003f; p.octaves = 5; p.ridgeAmount = 0.05f; p.warpStrength = 40.0f;
+        p.heightPower = 1.1f; p.waterLevel = 0.18f; p.snowLine = 2.0f; p.rockSlope = 0.45f; break;
+    case 4: // Plains
+        mainland(); p.frequency = 0.0025f; p.octaves = 4; p.ridgeAmount = 0.0f; p.warpStrength = 20.0f;
+        p.heightPower = 1.0f; p.waterLevel = 0.12f; p.snowLine = 3.0f; p.rockSlope = 0.6f; break;
+    case 5: // Mesa / canyons
+        mainland(); p.frequency = 0.004f; p.ridgeAmount = 0.2f; p.heightPower = 1.3f; p.terraceStrength = 0.9f;
         p.terraceSteps = 6; p.waterLevel = 0.05f; p.snowLine = 3.0f; p.rockSlope = 0.2f;
-        p.sandColor = {0.82f, 0.55f, 0.35f}; p.rockColor = {0.62f, 0.34f, 0.24f};
-        p.grassTint = {1.0f, 0.85f, 0.55f}; p.fogColor = {0.85f, 0.75f, 0.65f}; break;
-    case 5: // Alpine
-        p.frequency = 0.0055f; p.ridgeAmount = 1.0f; p.heightPower = 2.0f; p.warpStrength = 80.0f;
-        p.waterLevel = 0.15f; p.snowLine = 0.55f; p.snowBlend = 0.12f; p.erosionIterations = 120000; break;
+        p.sandTint = {1.1f, 0.8f, 0.6f}; p.rockTint = {1.35f, 0.8f, 0.6f};
+        p.grassTint = {1.1f, 0.9f, 0.6f}; p.fogColor = {0.85f, 0.75f, 0.65f}; break;
+    case 6: // Alpine island
+        p.frequency = 0.0045f; p.ridgeAmount = 1.0f; p.heightPower = 2.0f; p.warpStrength = 90.0f;
+        p.islandRadius = 0.5f; p.waterLevel = 0.12f; p.snowLine = 0.55f; p.snowBlend = 0.1f; break;
     default: break;
     }
     return p;
@@ -380,6 +514,38 @@ static void thermal(std::vector<float>& h, int N, int passes, float talus) {
     }
 }
 
+// Every below-sea-level cell that the ocean (connected to the map border) can't reach would
+// render as a lake. Raise those basins just above the water line and smooth them into the land.
+static void fillInlandBasins(std::vector<float>& h, int N, float W) {
+    std::vector<uint8_t> ocean(N * N, 0);
+    std::vector<int> stack;
+    auto seed = [&](int i) { if (!ocean[i] && h[i] < W) { ocean[i] = 1; stack.push_back(i); } };
+    for (int i = 0; i < N; ++i) { seed(i); seed((N - 1) * N + i); seed(i * N); seed(i * N + N - 1); }
+    while (!stack.empty()) {
+        int i = stack.back(); stack.pop_back();
+        int x = i % N, z = i / N;
+        for (int dz = -1; dz <= 1; ++dz) for (int dx = -1; dx <= 1; ++dx) {
+            int nx = x + dx, nz = z + dz;
+            if (nx >= 0 && nz >= 0 && nx < N && nz < N) seed(nz * N + nx);
+        }
+    }
+    const float floorH = W + 0.025f; // high enough to be grass, not a sandy puddle
+    std::vector<uint8_t> filled(N * N, 0);
+    for (int i = 0; i < N * N; ++i)
+        if (!ocean[i] && h[i] < floorH && h[i] < W + 1e-6f) { h[i] = floorH; filled[i] = 1; }
+    // Soften the filled flats into the surrounding slopes
+    for (int pass = 0; pass < 4; ++pass) {
+        std::vector<float> src = h;
+        for (int z = 1; z < N - 1; ++z) for (int x = 1; x < N - 1; ++x) {
+            int i = z * N + x;
+            if (!filled[i]) continue;
+            float sum = 0;
+            for (int dz = -1; dz <= 1; ++dz) for (int dx = -1; dx <= 1; ++dx) sum += src[(z + dz) * N + x + dx];
+            h[i] = std::max(floorH, sum / 9.0f);
+        }
+    }
+}
+
 void Terrain::generateProcedural(int size, float scale, float heightScale, float textureTile) {
     generateProcedural(size, scale, heightScale, textureTile, params_);
 }
@@ -390,16 +556,24 @@ void Terrain::generateProcedural(int size, float scale, float heightScale, float
     const TerrainParams& P = params_;
     float half = (N - 1) * 0.5f * scale_;
 
-    // 1. Raw noise, normalized to 0..1 so the settings behave the same at any seed
+    // 1. Raw noise (multithreaded), normalized to 0..1 so the settings behave the same at any seed
     HeightGen gen(P);
     std::vector<float> h(N * N);
-    float lo = 1e9f, hi = -1e9f;
-    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
-        float v = gen.raw((float)x, (float)z); h[z * N + x] = v; lo = std::min(lo, v); hi = std::max(hi, v);
+    {
+        unsigned nt = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+        std::vector<std::thread> pool;
+        for (unsigned t = 0; t < nt; ++t)
+            pool.emplace_back([&, t]() {
+                for (int z = (int)t; z < N; z += (int)nt) for (int x = 0; x < N; ++x) h[z * N + x] = gen.raw((float)x, (float)z);
+            });
+        for (auto& th : pool) th.join();
     }
+    float lo = 1e9f, hi = -1e9f;
+    for (float v : h) { lo = std::min(lo, v); hi = std::max(hi, v); }
     float range = std::max(hi - lo, 1e-6f);
 
-    // 2. Shaping: redistribution curve, terraces, island falloff
+    // 2. Shaping: redistribution curve, terraces, island
+    const float W = P.waterLevel;
     for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
         float v = (h[z * N + x] - lo) / range;
         v = std::pow(glm::clamp(v, 0.0f, 1.0f), std::max(P.heightPower, 0.05f));
@@ -410,9 +584,19 @@ void Terrain::generateProcedural(int size, float scale, float heightScale, float
         }
         if (P.islandStrength > 0.0f) {
             float nx = (x / (float)(N - 1)) * 2 - 1, nz = (z / (float)(N - 1)) * 2 - 1;
-            float d = std::sqrt(nx * nx + nz * nz);
-            float fall = 1.0f - smooth01(P.islandRadius, 1.0f, d);
-            v *= lerpf(1.0f, fall, glm::clamp(P.islandStrength, 0.0f, 1.0f));
+            // Distance from the centre, distorted by low-frequency noise for bays and peninsulas.
+            // Scaled by map size (not noise frequency) so the island keeps its shape at any resolution.
+            float cf = 2.5f / N;
+            float cn = gen.fbm(x * cf + 31.7f, z * cf + 17.3f) * 0.75f + gen.fbm(x * cf * 3.0f + 5.1f, z * cf * 3.0f + 9.4f) * 0.25f;
+            float dd = std::sqrt(nx * nx + nz * nz) + cn * P.coastNoise;
+            float land = 1.0f - smooth01(P.islandRadius, P.islandRadius + 0.35f, dd);
+            land *= 1.0f - smooth01(0.86f, 0.97f, std::max(std::fabs(nx), std::fabs(nz))); // ocean all around
+            // Beaches and low hills along the coast, rising to the tallest mountains inland
+            float inland = smooth01(0.5f, 0.9f, land);
+            float landH = W + 0.012f + v * (1.0f - W) * (0.06f + 0.94f * inland * std::sqrt(inland));
+            float seaH = W - P.seaDepth + v * 0.04f;
+            float isl = lerpf(seaH, landH, smooth01(0.0f, 0.65f, land));
+            v = lerpf(v, isl, glm::clamp(P.islandStrength, 0.0f, 1.0f));
         }
         h[z * N + x] = v;
     }
@@ -420,6 +604,7 @@ void Terrain::generateProcedural(int size, float scale, float heightScale, float
     // 3. Erosion (in normalized units)
     thermal(h, N, P.thermalIterations, 0.6f / N * 3.0f);
     erode(h, N, P);
+    if (P.waterEnabled && P.fillLakes) fillInlandBasins(h, N, W);
 
     // 4. To world space
     heights_.resize(N * N);
@@ -454,20 +639,6 @@ void Terrain::generateProcedural(int size, float scale, float heightScale, float
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // 7. Water quad (much larger than the terrain so it reads as an ocean)
-    if (!waterVAO_) {
-        glGenVertexArrays(1, &waterVAO_); glGenBuffers(1, &waterVBO_);
-        glBindVertexArray(waterVAO_); glBindBuffer(GL_ARRAY_BUFFER, waterVBO_);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float))); glEnableVertexAttribArray(2);
-        glBindVertexArray(0);
-    }
-    float e = half * 8.0f;
-    float quad[] = { -e, 0, -e, 0, 1, 0, 0, 0,   e, 0, -e, 0, 1, 0, 1, 0,   e, 0, e, 0, 1, 0, 1, 1,
-                     -e, 0, -e, 0, 1, 0, 0, 0,   e, 0, e, 0, 1, 0, 1, 1,   -e, 0, e, 0, 1, 0, 0, 1 };
-    glBindBuffer(GL_ARRAY_BUFFER, waterVBO_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
 }
 
 float Terrain::getHeightAt(float wx, float wz) const {
@@ -479,7 +650,5 @@ float Terrain::getHeightAt(float wx, float wz) const {
     int xi = (int)x, zi = (int)z; float fx = x - xi, fz = z - zi;
     float h = lerpf(lerpf(heights_[zi * N + xi], heights_[zi * N + xi + 1], fx),
                     lerpf(heights_[(zi + 1) * N + xi], heights_[(zi + 1) * N + xi + 1], fx), fz);
-    // The player wades through shallow water instead of walking on the sea floor
-    if (params_.waterEnabled) h = std::max(h, waterY_ - 0.6f);
     return h;
 }

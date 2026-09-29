@@ -1,0 +1,2 @@
+Terrain materials from Poly Haven (CC0, https://polyhaven.com):
+ grass = rocky_terrain_02, grass2 = leafy_grass, rock = rock_face_03, sand = coast_sand_01, snow = snow_02
