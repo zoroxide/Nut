@@ -44,6 +44,85 @@ bool GUI::init(GLFWwindow* window) {
     return true;
 }
 
+void GUI::drawTerrainPanel() {
+    TerrainParams& P = engine_->terrainParams();
+    static bool autoRegen = false;
+    static int preset = 0;
+    bool changed = false, force = false;
+
+    if (!ImGui::CollapsingHeader("Procedural Terrain", ImGuiTreeNodeFlags_DefaultOpen)) return;
+
+    int nPresets = 0;
+    const char* const* names = TerrainParams::presetNames(nPresets);
+    ImGui::Combo("Preset", &preset, names, nPresets);
+    ImGui::SameLine();
+    if (ImGui::Button("Apply")) {
+        int seed = P.seed;
+        P = TerrainParams::preset(preset);
+        P.seed = seed;
+        force = true;
+    }
+
+    ImGui::InputInt("Seed", &P.seed);
+    ImGui::SameLine();
+    if (ImGui::Button("Random")) { P.seed = (int)(ImGui::GetTime() * 1000.0) ^ (rand() & 0xffff); force = true; }
+
+    if (ImGui::TreeNodeEx("Shape", ImGuiTreeNodeFlags_DefaultOpen)) {
+        changed |= ImGui::SliderFloat("Frequency", &P.frequency, 0.001f, 0.02f, "%.4f", ImGuiSliderFlags_Logarithmic);
+        changed |= ImGui::SliderInt("Octaves", &P.octaves, 1, 10);
+        changed |= ImGui::SliderFloat("Persistence", &P.persistence, 0.2f, 0.8f);
+        changed |= ImGui::SliderFloat("Lacunarity", &P.lacunarity, 1.5f, 3.5f);
+        changed |= ImGui::SliderFloat("Ridged Mountains", &P.ridgeAmount, 0.0f, 1.0f);
+        changed |= ImGui::SliderFloat("Domain Warp", &P.warpStrength, 0.0f, 200.0f);
+        changed |= ImGui::SliderFloat("Height Curve", &P.heightPower, 0.5f, 3.5f);
+        changed |= ImGui::SliderFloat("Terracing", &P.terraceStrength, 0.0f, 1.0f);
+        changed |= ImGui::SliderInt("Terrace Steps", &P.terraceSteps, 2, 20);
+        changed |= ImGui::SliderFloat("Island Falloff", &P.islandStrength, 0.0f, 1.0f);
+        changed |= ImGui::SliderFloat("Island Radius", &P.islandRadius, 0.1f, 0.95f);
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Erosion")) {
+        changed |= ImGui::SliderInt("Hydraulic Droplets", &P.erosionIterations, 0, 300000);
+        changed |= ImGui::SliderFloat("Erode Strength", &P.erosionStrength, 0.0f, 1.0f);
+        changed |= ImGui::SliderFloat("Deposit Strength", &P.depositStrength, 0.0f, 1.0f);
+        changed |= ImGui::SliderInt("Thermal Passes", &P.thermalIterations, 0, 30);
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Water")) {
+        changed |= ImGui::Checkbox("Enable Water", &P.waterEnabled);
+        changed |= ImGui::SliderFloat("Water Level", &P.waterLevel, 0.0f, 0.9f);
+        ImGui::SliderFloat("Water Opacity", &P.waterOpacity, 0.2f, 1.0f);
+        ImGui::ColorEdit3("Shallow Color", &P.waterShallow.x);
+        ImGui::ColorEdit3("Deep Color", &P.waterDeep.x);
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Materials")) {
+        ImGui::SliderFloat("Beach Width", &P.beachWidth, 0.0f, 0.15f);
+        ImGui::SliderFloat("Rock Slope", &P.rockSlope, 0.05f, 0.9f);
+        ImGui::SliderFloat("Snow Line", &P.snowLine, 0.2f, 1.2f);
+        ImGui::SliderFloat("Snow Blend", &P.snowBlend, 0.01f, 0.4f);
+        ImGui::ColorEdit3("Grass Tint", &P.grassTint.x);
+        ImGui::ColorEdit3("Sand", &P.sandColor.x);
+        ImGui::ColorEdit3("Rock", &P.rockColor.x);
+        ImGui::ColorEdit3("Snow", &P.snowColor.x);
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Atmosphere")) {
+        ImGui::SliderFloat("Fog Density", &P.fogDensity, 0.0f, 0.01f, "%.4f");
+        ImGui::ColorEdit3("Fog Color", &P.fogColor.x);
+        ImGui::TreePop();
+    }
+
+    ImGui::Checkbox("Auto Regenerate (slow with erosion)", &autoRegen);
+    // While dragging a slider just remember that something changed; rebuild on release
+    static bool pending = false;
+    if (changed && autoRegen) pending = true;
+    if (!autoRegen) pending = false;
+    bool rebuild = force || (pending && !ImGui::IsMouseDown(0));
+    if (ImGui::Button("Regenerate Terrain")) rebuild = true;
+    if (rebuild) { pending = false; engine_->regenerateTerrain(); }
+}
+
 void GUI::render() {
     if (!initialized_) return;
 
@@ -155,9 +234,7 @@ void GUI::render() {
     float cop = engine_->getCloudOpacity();
     if (ImGui::SliderFloat("Cloud Opacity", &cop, 0.0f, 1.0f)) engine_->setCloudOpacity(cop);
 
-    if (ImGui::Button("Regenerate Terrain")) {
-        engine_->regenerateTerrain();
-    }
+    drawTerrainPanel();
 
     ImGui::End();
 

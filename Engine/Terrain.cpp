@@ -3,6 +3,9 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <cmath>
 #include <vector>
+#include <random>
+#include <algorithm>
+#include <GLFW/glfw3.h>
 #include "libs/stb_image.h"
 
 Terrain::~Terrain() {
@@ -13,6 +16,9 @@ Terrain::~Terrain() {
     if (flatEBO_) glDeleteBuffers(1, &flatEBO_);
     if (flatVAO_) glDeleteVertexArrays(1, &flatVAO_);
     if (flatTex_) glDeleteTextures(1, &flatTex_);
+    if (heightTex_) glDeleteTextures(1, &heightTex_);
+    if (waterVBO_) glDeleteBuffers(1, &waterVBO_);
+    if (waterVAO_) glDeleteVertexArrays(1, &waterVAO_);
 }
 
 void Terrain::buildProcedural(const std::vector<float>& interleaved, const std::vector<unsigned int>& indices) {
@@ -144,79 +150,336 @@ void Terrain::draw(GLuint shaderProgram, const glm::mat4& model, const glm::mat4
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
     } else {
+        const TerrainParams& P = params_;
+        auto U = [&](const char* n) { return glGetUniformLocation(shaderProgram, n); };
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, procTexture_);
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, &model[0][0]);
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "mvp"), 1, GL_FALSE, &(proj * view * model)[0][0]);
+        glUniform1i(U("shadeMode"), 1);
+        glUniform1f(U("waterY"), P.waterEnabled ? waterY_ : -1e9f);
+        glUniform1f(U("beachWidth"), P.beachWidth * heightScale_);
+        glUniform1f(U("rockSlope"), P.rockSlope);
+        glUniform1f(U("snowLine"), P.snowLine * heightScale_);
+        glUniform1f(U("snowBlend"), std::max(P.snowBlend * heightScale_, 0.01f));
+        glUniform3fv(U("grassTint"), 1, &P.grassTint.x);
+        glUniform3fv(U("sandColor"), 1, &P.sandColor.x);
+        glUniform3fv(U("rockColor"), 1, &P.rockColor.x);
+        glUniform3fv(U("snowColor"), 1, &P.snowColor.x);
+        glUniform3fv(U("fogColor"), 1, &P.fogColor.x);
+        glUniform1f(U("fogDensity"), P.fogDensity);
+        glUniformMatrix4fv(U("model"), 1, GL_FALSE, &model[0][0]);
+        glUniformMatrix4fv(U("mvp"), 1, GL_FALSE, &(proj * view * model)[0][0]);
         glBindVertexArray(vao_);
         glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
+        if (P.waterEnabled) drawWater(shaderProgram, model, view, proj);
+        glUniform1i(U("shadeMode"), 0); // objects/coins drawn afterwards use plain shading
     }
 }
 
-// --- Internal noise helpers ---
-static inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
-static inline float fade(float t) { return t * t * (3.0f - 2.0f * t); }
-static int hashI(int x, int y) { int n = x + y * 57; n = (n << 13) ^ n; return (n * (n * n * 60493 + 19990303) + 1376312589) & 0x7fffffff; }
-static float valueNoise(int x, int y) { return (hashI(x, y) / float(0x7fffffff)) * 2.0f - 1.0f; }
-static float smoothNoise(float x, float y) {
-    int xf = (int)floor(x); int yf = (int)floor(y);
-    float xf_frac = x - xf; float yf_frac = y - yf;
-    float v00 = valueNoise(xf, yf); float v10 = valueNoise(xf + 1, yf); float v01 = valueNoise(xf, yf + 1); float v11 = valueNoise(xf + 1, yf + 1);
-    float i1 = lerp(v00, v10, fade(xf_frac)); float i2 = lerp(v01, v11, fade(xf_frac)); return lerp(i1, i2, fade(yf_frac));
+void Terrain::drawWater(GLuint shaderProgram, const glm::mat4& model, const glm::mat4& view, const glm::mat4& proj) {
+    if (!waterVAO_) return;
+    const TerrainParams& P = params_;
+    auto U = [&](const char* n) { return glGetUniformLocation(shaderProgram, n); };
+    glm::mat4 M = glm::translate(model, glm::vec3(0.0f, waterY_, 0.0f));
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, heightTex_);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(U("heightTex"), 2);
+    glUniform1i(U("shadeMode"), 2);
+    glUniform1f(U("time"), (float)glfwGetTime());
+    glUniform1f(U("terrainHalf"), (size_ - 1) * 0.5f * scale_);
+    glUniform1f(U("waterOpacity"), P.waterOpacity);
+    glUniform3fv(U("waterShallow"), 1, &P.waterShallow.x);
+    glUniform3fv(U("waterDeep"), 1, &P.waterDeep.x);
+    glUniformMatrix4fv(U("model"), 1, GL_FALSE, &M[0][0]);
+    glUniformMatrix4fv(U("mvp"), 1, GL_FALSE, &(proj * view * M)[0][0]);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindVertexArray(waterVAO_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glDisable(GL_BLEND);
 }
-static float fbm(float x, float y) {
-    float total = 0.0f; float amp = 1.0f; float freq = 1.0f; const int OCT = 6; const float gain = 0.5f;
-    for (int i = 0; i < OCT; ++i) { total += amp * smoothNoise(x * freq, y * freq); freq *= 2.0f; amp *= gain; }
-    return total;
+// --- Presets ---
+static const char* kPresetNames[] = { "Mountains", "Rolling Hills", "Islands", "Plains", "Mesa / Canyons", "Alpine Peaks" };
+
+const char* const* TerrainParams::presetNames(int& count) {
+    count = (int)(sizeof(kPresetNames) / sizeof(kPresetNames[0]));
+    return kPresetNames;
+}
+
+TerrainParams TerrainParams::preset(int id) {
+    TerrainParams p; // defaults are the "Mountains" look
+    switch (id) {
+    case 1: // Rolling hills
+        p.frequency = 0.003f; p.octaves = 5; p.ridgeAmount = 0.05f; p.warpStrength = 40.0f;
+        p.heightPower = 1.1f; p.waterLevel = 0.18f; p.snowLine = 2.0f; p.rockSlope = 0.45f;
+        p.erosionIterations = 40000; break;
+    case 2: // Islands
+        p.frequency = 0.006f; p.ridgeAmount = 0.35f; p.heightPower = 1.4f; p.islandStrength = 1.0f;
+        p.islandRadius = 0.35f; p.waterLevel = 0.28f; p.snowLine = 0.95f; p.beachWidth = 0.035f; break;
+    case 3: // Plains
+        p.frequency = 0.0025f; p.octaves = 4; p.ridgeAmount = 0.0f; p.warpStrength = 20.0f;
+        p.heightPower = 1.0f; p.waterLevel = 0.12f; p.snowLine = 3.0f; p.rockSlope = 0.6f;
+        p.erosionIterations = 20000; break;
+    case 4: // Mesa / canyons
+        p.frequency = 0.004f; p.ridgeAmount = 0.2f; p.heightPower = 1.3f; p.terraceStrength = 0.9f;
+        p.terraceSteps = 6; p.waterLevel = 0.05f; p.snowLine = 3.0f; p.rockSlope = 0.2f;
+        p.sandColor = {0.82f, 0.55f, 0.35f}; p.rockColor = {0.62f, 0.34f, 0.24f};
+        p.grassTint = {1.0f, 0.85f, 0.55f}; p.fogColor = {0.85f, 0.75f, 0.65f}; break;
+    case 5: // Alpine
+        p.frequency = 0.0055f; p.ridgeAmount = 1.0f; p.heightPower = 2.0f; p.warpStrength = 80.0f;
+        p.waterLevel = 0.15f; p.snowLine = 0.55f; p.snowBlend = 0.12f; p.erosionIterations = 120000; break;
+    default: break;
+    }
+    return p;
+}
+
+// --- Noise helpers (seeded gradient/Perlin noise) ---
+static inline float lerpf(float a, float b, float t) { return a + (b - a) * t; }
+static inline float fade5(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+static inline float smooth01(float e0, float e1, float x) {
+    float t = glm::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t);
+}
+static inline unsigned hash2(int x, int y, unsigned seed) {
+    unsigned h = (unsigned)x * 374761393u + (unsigned)y * 668265263u + seed * 2246822519u;
+    h = (h ^ (h >> 13)) * 1274126177u; return h ^ (h >> 16);
+}
+static float gradNoise(float x, float y, unsigned seed) {
+    int xi = (int)std::floor(x), yi = (int)std::floor(y);
+    float xf = x - xi, yf = y - yi;
+    auto g = [&](int ix, int iy, float dx, float dy) {
+        float a = (hash2(ix, iy, seed) & 1023u) * (6.2831853f / 1024.0f);
+        return std::cos(a) * dx + std::sin(a) * dy;
+    };
+    float u = fade5(xf), v = fade5(yf);
+    float n = lerpf(lerpf(g(xi, yi, xf, yf), g(xi + 1, yi, xf - 1, yf), u),
+                    lerpf(g(xi, yi + 1, xf, yf - 1), g(xi + 1, yi + 1, xf - 1, yf - 1), u), v);
+    return n * 1.4142f; // roughly [-1, 1]
+}
+
+namespace {
+struct HeightGen {
+    const TerrainParams& p; unsigned seed; float ox, oy;
+    explicit HeightGen(const TerrainParams& params) : p(params), seed((unsigned)params.seed) {
+        ox = (hash2(1, 7, seed) & 0xffff) * 0.37f; oy = (hash2(9, 3, seed) & 0xffff) * 0.37f;
+    }
+    float fbm(float x, float y) const {
+        float total = 0, amp = 1, freq = 1, norm = 0;
+        for (int i = 0; i < p.octaves; ++i) {
+            total += amp * gradNoise(x * freq, y * freq, seed + i * 101u); norm += amp;
+            amp *= p.persistence; freq *= p.lacunarity;
+        }
+        return total / norm; // ~[-1,1]
+    }
+    // Ridged multifractal: sharp crests, with detail concentrated on the slopes
+    float ridged(float x, float y) const {
+        float total = 0, amp = 1, freq = 1, norm = 0, weight = 1;
+        for (int i = 0; i < p.octaves; ++i) {
+            float n = 1.0f - std::fabs(gradNoise(x * freq, y * freq, seed + 977u + i * 131u));
+            n *= n; n *= weight;
+            weight = glm::clamp(n * 2.0f, 0.0f, 1.0f);
+            total += n * amp; norm += amp; amp *= p.persistence; freq *= p.lacunarity;
+        }
+        return total / norm; // ~[0,1]
+    }
+    // Raw (un-normalized) height at grid coordinate
+    float raw(float gx, float gz) const {
+        float x = gx + ox, y = gz + oy;
+        if (p.warpStrength > 0.0f) {
+            float wx = gradNoise(x * p.frequency * 2.0f + 5.2f, y * p.frequency * 2.0f + 1.3f, seed + 11u);
+            float wy = gradNoise(x * p.frequency * 2.0f + 9.7f, y * p.frequency * 2.0f + 3.1f, seed + 23u);
+            x += wx * p.warpStrength; y += wy * p.warpStrength;
+        }
+        float fx = x * p.frequency, fy = y * p.frequency;
+        float base = fbm(fx, fy) * 0.5f + 0.5f;
+        float ridge = ridged(fx, fy);
+        // Ridges appear only in some regions so the land has both plains and ranges
+        float mask = smooth01(0.30f, 0.70f, gradNoise(fx * 0.35f + 40.0f, fy * 0.35f + 40.0f, seed + 55u) * 0.5f + 0.5f);
+        return lerpf(base, ridge, p.ridgeAmount * (0.35f + 0.65f * mask));
+    }
+};
+} // namespace
+
+// Simple particle-based hydraulic erosion (carves valleys, deposits sediment)
+static void erode(std::vector<float>& h, int N, const TerrainParams& P) {
+    if (P.erosionIterations <= 0) return;
+    std::mt19937 rng((unsigned)P.seed * 2654435761u + 17u);
+    std::uniform_real_distribution<float> U(0.0f, 1.0f);
+    const float inertia = 0.05f, capacityK = 4.0f, minSlope = 0.01f, evaporate = 0.012f, gravity = 4.0f;
+    const int maxLife = 40, R = 3;
+
+    // Precompute brush (erosion is spread over a small disk to avoid pits)
+    std::vector<int> bx, bz; std::vector<float> bw; float wsum = 0;
+    for (int dz = -R; dz <= R; ++dz) for (int dx = -R; dx <= R; ++dx) {
+        float d = std::sqrt((float)(dx * dx + dz * dz)); if (d > R) continue;
+        bx.push_back(dx); bz.push_back(dz); bw.push_back(1.0f - d / R); wsum += 1.0f - d / R;
+    }
+    for (auto& w : bw) w /= wsum;
+
+    auto sample = [&](float x, float z, float& gx, float& gz) {
+        int xi = (int)x, zi = (int)z; float fx = x - xi, fz = z - zi;
+        float h00 = h[zi * N + xi], h10 = h[zi * N + xi + 1], h01 = h[(zi + 1) * N + xi], h11 = h[(zi + 1) * N + xi + 1];
+        gx = (h10 - h00) * (1 - fz) + (h11 - h01) * fz;
+        gz = (h01 - h00) * (1 - fx) + (h11 - h10) * fx;
+        return h00 * (1 - fx) * (1 - fz) + h10 * fx * (1 - fz) + h01 * (1 - fx) * fz + h11 * fx * fz;
+    };
+
+    for (int it = 0; it < P.erosionIterations; ++it) {
+        float x = U(rng) * (N - 3) + 1, z = U(rng) * (N - 3) + 1;
+        float dx = 0, dz = 0, speed = 1, water = 1, sediment = 0;
+        for (int life = 0; life < maxLife; ++life) {
+            int xi = (int)x, zi = (int)z;
+            if (xi < 1 || zi < 1 || xi >= N - 2 || zi >= N - 2) break;
+            float fx = x - xi, fz = z - zi, gx, gz;
+            float hOld = sample(x, z, gx, gz);
+            dx = dx * inertia - gx * (1 - inertia); dz = dz * inertia - gz * (1 - inertia);
+            float len = std::sqrt(dx * dx + dz * dz);
+            if (len < 1e-6f) { float a = U(rng) * 6.2831853f; dx = std::cos(a); dz = std::sin(a); len = 1; }
+            dx /= len; dz /= len;
+            x += dx; z += dz;
+            if ((int)x < 1 || (int)z < 1 || (int)x >= N - 2 || (int)z >= N - 2) break;
+            float gx2, gz2; float hNew = sample(x, z, gx2, gz2);
+            float dh = hNew - hOld;
+            float cap = std::max(-dh * speed * water * capacityK, minSlope);
+            if (sediment > cap || dh > 0) {
+                float amt = (dh > 0) ? std::min(dh, sediment) : (sediment - cap) * P.depositStrength;
+                sediment -= amt;
+                h[zi * N + xi] += amt * (1 - fx) * (1 - fz); h[zi * N + xi + 1] += amt * fx * (1 - fz);
+                h[(zi + 1) * N + xi] += amt * (1 - fx) * fz; h[(zi + 1) * N + xi + 1] += amt * fx * fz;
+            } else {
+                float amt = std::min((cap - sediment) * P.erosionStrength, -dh);
+                for (size_t k = 0; k < bw.size(); ++k) {
+                    int cx = xi + bx[k], cz = zi + bz[k];
+                    if (cx < 0 || cz < 0 || cx >= N || cz >= N) continue;
+                    float take = amt * bw[k]; float& c = h[cz * N + cx];
+                    float t = std::min(take, c); c -= t; sediment += t;
+                }
+            }
+            speed = std::sqrt(std::max(0.0f, speed * speed + (-dh) * gravity));
+            water *= (1 - evaporate);
+        }
+    }
+}
+
+// Thermal erosion: slopes steeper than the talus angle shed material downhill
+static void thermal(std::vector<float>& h, int N, int passes, float talus) {
+    for (int pass = 0; pass < passes; ++pass) {
+        for (int z = 1; z < N - 1; ++z) for (int x = 1; x < N - 1; ++x) {
+            float c = h[z * N + x]; float maxD = 0; int mi = -1;
+            static const int off[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
+            for (int k = 0; k < 4; ++k) {
+                float d = c - h[(z + off[k][1]) * N + x + off[k][0]];
+                if (d > maxD) { maxD = d; mi = k; }
+            }
+            if (mi >= 0 && maxD > talus) {
+                float mv = (maxD - talus) * 0.4f;
+                h[z * N + x] -= mv; h[(z + off[mi][1]) * N + x + off[mi][0]] += mv;
+            }
+        }
+    }
 }
 
 void Terrain::generateProcedural(int size, float scale, float heightScale, float textureTile) {
-    size_ = size; scale_ = scale; heightScale_ = heightScale; tile_ = textureTile;
-    int N = size_;
+    generateProcedural(size, scale, heightScale, textureTile, params_);
+}
+
+void Terrain::generateProcedural(int size, float scale, float heightScale, float textureTile, const TerrainParams& params) {
+    size_ = std::max(size, 4); scale_ = scale; heightScale_ = heightScale; tile_ = textureTile; params_ = params;
+    const int N = size_;
+    const TerrainParams& P = params_;
     float half = (N - 1) * 0.5f * scale_;
 
-    std::vector<float> heights(N * N);
-    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x)
-        heights[z * N + x] = fbm(x * 0.06f, z * 0.06f) * heightScale_;
-
-    struct V { glm::vec3 p; glm::vec3 n; glm::vec2 uv; };
-    std::vector<V> verts(N * N);
+    // 1. Raw noise, normalized to 0..1 so the settings behave the same at any seed
+    HeightGen gen(P);
+    std::vector<float> h(N * N);
+    float lo = 1e9f, hi = -1e9f;
     for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
-        V &v = verts[z * N + x];
-        v.p = glm::vec3(x * scale_ - half, heights[z * N + x], z * scale_ - half);
-        v.uv = glm::vec2((float)x / (N - 1) * tile_, (float)z / (N - 1) * tile_);
+        float v = gen.raw((float)x, (float)z); h[z * N + x] = v; lo = std::min(lo, v); hi = std::max(hi, v);
+    }
+    float range = std::max(hi - lo, 1e-6f);
+
+    // 2. Shaping: redistribution curve, terraces, island falloff
+    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
+        float v = (h[z * N + x] - lo) / range;
+        v = std::pow(glm::clamp(v, 0.0f, 1.0f), std::max(P.heightPower, 0.05f));
+        if (P.terraceStrength > 0.0f && P.terraceSteps > 1) {
+            float s = v * P.terraceSteps, f = std::floor(s);
+            float stepped = (f + smooth01(0.35f, 0.65f, s - f)) / P.terraceSteps;
+            v = lerpf(v, stepped, glm::clamp(P.terraceStrength, 0.0f, 1.0f));
+        }
+        if (P.islandStrength > 0.0f) {
+            float nx = (x / (float)(N - 1)) * 2 - 1, nz = (z / (float)(N - 1)) * 2 - 1;
+            float d = std::sqrt(nx * nx + nz * nz);
+            float fall = 1.0f - smooth01(P.islandRadius, 1.0f, d);
+            v *= lerpf(1.0f, fall, glm::clamp(P.islandStrength, 0.0f, 1.0f));
+        }
+        h[z * N + x] = v;
     }
 
-    std::vector<unsigned int> idx; idx.reserve((N - 1) * (N - 1) * 6);
+    // 3. Erosion (in normalized units)
+    thermal(h, N, P.thermalIterations, 0.6f / N * 3.0f);
+    erode(h, N, P);
+
+    // 4. To world space
+    heights_.resize(N * N);
+    for (int i = 0; i < N * N; ++i) heights_[i] = h[i] * heightScale_;
+    waterY_ = P.waterLevel * heightScale_;
+
+    auto H = [&](int x, int z) { return heights_[glm::clamp(z, 0, N - 1) * N + glm::clamp(x, 0, N - 1)]; };
+
+    // 5. Mesh with smooth normals from central differences
+    std::vector<float> inter; inter.reserve((size_t)N * N * 8);
+    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
+        float dhdx = (H(x + 1, z) - H(x - 1, z)) / (2.0f * scale_);
+        float dhdz = (H(x, z + 1) - H(x, z - 1)) / (2.0f * scale_);
+        glm::vec3 n = glm::normalize(glm::vec3(-dhdx, 1.0f, -dhdz));
+        inter.insert(inter.end(), { x * scale_ - half, H(x, z), z * scale_ - half, n.x, n.y, n.z,
+                                    (float)x / (N - 1) * tile_, (float)z / (N - 1) * tile_ });
+    }
+    std::vector<unsigned int> idx; idx.reserve((size_t)(N - 1) * (N - 1) * 6);
     for (int z = 0; z < N - 1; ++z) for (int x = 0; x < N - 1; ++x) {
-        int tl = z * N + x; int tr = tl + 1; int bl = (z + 1) * N + x; int br = bl + 1;
-        idx.push_back(tl); idx.push_back(bl); idx.push_back(br);
-        idx.push_back(tl); idx.push_back(br); idx.push_back(tr);
+        unsigned tl = z * N + x, tr = tl + 1, bl = (z + 1) * N + x, br = bl + 1;
+        idx.insert(idx.end(), { tl, bl, br, tl, br, tr });
     }
-
-    std::vector<glm::vec3> normalSum(verts.size(), glm::vec3(0.0f));
-    for (size_t i = 0; i < idx.size(); i += 3) {
-        unsigned int i0 = idx[i]; unsigned int i1 = idx[i + 1]; unsigned int i2 = idx[i + 2];
-        glm::vec3 p0 = verts[i0].p; glm::vec3 p1 = verts[i1].p; glm::vec3 p2 = verts[i2].p;
-        glm::vec3 n = glm::normalize(glm::cross(p1 - p0, p2 - p0));
-        normalSum[i0] += n; normalSum[i1] += n; normalSum[i2] += n;
-    }
-    for (size_t i = 0; i < verts.size(); ++i) verts[i].n = glm::normalize(normalSum[i]);
-
-    std::vector<float> inter; inter.reserve(verts.size() * 8);
-    for (auto &v : verts) { inter.push_back(v.p.x); inter.push_back(v.p.y); inter.push_back(v.p.z);
-        inter.push_back(v.n.x); inter.push_back(v.n.y); inter.push_back(v.n.z);
-        inter.push_back(v.uv.x); inter.push_back(v.uv.y); }
     buildProcedural(inter, idx);
+
+    // 6. Height texture (used by the water shader for depth / shoreline foam)
+    if (!heightTex_) glGenTextures(1, &heightTex_);
+    glBindTexture(GL_TEXTURE_2D, heightTex_);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, N, N, 0, GL_RED, GL_FLOAT, heights_.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // 7. Water quad (much larger than the terrain so it reads as an ocean)
+    if (!waterVAO_) {
+        glGenVertexArrays(1, &waterVAO_); glGenBuffers(1, &waterVBO_);
+        glBindVertexArray(waterVAO_); glBindBuffer(GL_ARRAY_BUFFER, waterVBO_);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float))); glEnableVertexAttribArray(2);
+        glBindVertexArray(0);
+    }
+    float e = half * 8.0f;
+    float quad[] = { -e, 0, -e, 0, 1, 0, 0, 0,   e, 0, -e, 0, 1, 0, 1, 0,   e, 0, e, 0, 1, 0, 1, 1,
+                     -e, 0, -e, 0, 1, 0, 0, 0,   e, 0, e, 0, 1, 0, 1, 1,   -e, 0, e, 0, 1, 0, 0, 1 };
+    glBindBuffer(GL_ARRAY_BUFFER, waterVBO_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
 }
 
 float Terrain::getHeightAt(float wx, float wz) const {
-    if (isFlat_) {
-        return 0.0f; // flat plane at Y=0
-    }
-    float half = (size_ - 1) * 0.5f * scale_;
-    float x = (wx + half) / scale_;
-    float z = (wz + half) / scale_;
-    return fbm(x * 0.06f, z * 0.06f) * heightScale_;
+    if (isFlat_ || heights_.empty()) return 0.0f; // flat plane at Y=0
+    const int N = size_;
+    float half = (N - 1) * 0.5f * scale_;
+    float x = glm::clamp((wx + half) / scale_, 0.0f, (float)(N - 1) - 0.001f);
+    float z = glm::clamp((wz + half) / scale_, 0.0f, (float)(N - 1) - 0.001f);
+    int xi = (int)x, zi = (int)z; float fx = x - xi, fz = z - zi;
+    float h = lerpf(lerpf(heights_[zi * N + xi], heights_[zi * N + xi + 1], fx),
+                    lerpf(heights_[(zi + 1) * N + xi], heights_[(zi + 1) * N + xi + 1], fx), fz);
+    // The player wades through shallow water instead of walking on the sea floor
+    if (params_.waterEnabled) h = std::max(h, waterY_ - 0.6f);
+    return h;
 }

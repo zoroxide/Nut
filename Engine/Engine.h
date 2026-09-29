@@ -115,6 +115,7 @@ private:
     float terrainScale_;
     float heightScale_;
     float textureTile_;
+    TerrainParams terrainParams_;
 
     // Last-used file paths (for UI / serialization)
     std::string panoramaPath_;
@@ -137,6 +138,7 @@ public: // Public API
 
     // Regenerate terrain mesh with current constants
     void regenerateTerrain();
+    void respawnCoins();
 
     // Getters / setters for configurable constants and file paths
     int getTerrainSize() const;
@@ -147,6 +149,10 @@ public: // Public API
     void setHeightScale(float v);
     float getTextureTile() const;
     void setTextureTile(float v);
+
+    // Full procedural-generation settings (edited live by the GUI)
+    TerrainParams& terrainParams() { return terrainParams_; }
+    float getWaterY() const { return terrain_.getWaterY(); }
 
     // File path accessors
     const std::string& getPanoramaPath() const;

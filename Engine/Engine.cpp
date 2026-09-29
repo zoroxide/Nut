@@ -37,7 +37,7 @@ Engine::Engine()
   // Defaults for configurable constants and paths
   terrainSize_ = 512;
   terrainScale_ = 1.0f;
-  heightScale_ = 6.0f;
+  heightScale_ = 60.0f;
   textureTile_ = 22.0f;
   panoramaPath_.clear();
   terrainTexturePath_.clear();
@@ -131,11 +131,11 @@ bool Engine::init(bool fullscreen) {
 
   // Coins subsystem
   coins_.initMesh();
-  coins_.spawnGrid(12, 6.0f, 0.8f); // spawn a ring of coins near origin
 
   // Generate initial procedural terrain via Terrain subsystem
   terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_,
-                              textureTile_);
+                              textureTile_, terrainParams_);
+  respawnCoins();
 
   // Initialize GUI after the OpenGL context is created
   if (gui_)
@@ -287,7 +287,7 @@ void Engine::mainloop() {
     camera_.setYawPitch(yaw_, pitch_);
     glm::mat4 view = camera_.getView();
     glm::mat4 proj =
-        camera_.getProj(60.0f, (float)SCR_W / (float)SCR_H, 0.1f, 500.0f);
+        camera_.getProj(60.0f, (float)SCR_W / (float)SCR_H, 0.1f, 1500.0f);
     glm::mat4 model(1.0f);
 
     // --- Clear first (important!) ---
@@ -468,5 +468,12 @@ void Engine::updateMovement(float dt) {
 // ----------------- Runtime config API -----------------
 void Engine::regenerateTerrain() {
   terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_,
-                              textureTile_);
+                              textureTile_, terrainParams_);
+  respawnCoins();
+}
+
+void Engine::respawnCoins() {
+  // Scatter coins over the heightmap so they follow the terrain
+  float half = (terrainSize_ - 1) * 0.5f * terrainScale_ - 4.0f;
+  coins_.spawnRandomOnTerrain(40, -half, half, -half, half, 0.8f, terrain_);
 }
