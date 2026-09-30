@@ -9,18 +9,17 @@ Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image 
  - CS633 / CS352 Computer Graphics & linear algebra college courses
 
 # Screenshots
-### using HDR panorama
+new verion:
+<img width="1920" height="1080" alt="Screenshot From 2026-09-30 11-52-11" src="https://github.com/user-attachments/assets/6d710708-2c6d-4d0d-bae0-645753addcd3" />
+<img width="1920" height="1080" alt="Screenshot From 2026-09-30 11-54-03" src="https://github.com/user-attachments/assets/df1cdf76-f1b2-4c4d-9ac5-2cea998f0848" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/3b43c0d8-952c-44d3-b254-6d54c94634bd" />
+<img width="1920" height="1080" alt="Screenshot From 2026-09-30 10-48-17" src="https://github.com/user-attachments/assets/8c3fd254-9e4b-44ee-a6c3-abd552941da7" />
 old version:
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f3ffdeab-faa8-443a-b2bd-3d36c32b81de" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/242c0160-3348-43c3-896a-9da0c6687416" />
 <img width="1366" height="768" alt="Screenshot From 2026-09-13 04-54-36" src="https://github.com/user-attachments/assets/08c704ee-2f23-49a2-ac3d-a3ad25abd3ef" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/d0fcbf73-9daa-42e4-8045-116761a2fe4d" />
 <img width="1927" height="1080" alt="image" src="https://github.com/user-attachments/assets/50be3578-bbae-4739-96e2-42976e7c3efa" />
-new verion:
-<img width="1920" height="1080" alt="Screenshot From 2026-09-30 11-52-11" src="https://github.com/user-attachments/assets/6d710708-2c6d-4d0d-bae0-645753addcd3" />
-<img width="1920" height="1080" alt="Screenshot From 2026-09-30 11-54-03" src="https://github.com/user-attachments/assets/df1cdf76-f1b2-4c4d-9ac5-2cea998f0848" />
-<img width="1920" height="1080" alt="Screenshot From 2026-09-30 10-48-17" src="https://github.com/user-attachments/assets/8c3fd254-9e4b-44ee-a6c3-abd552941da7" />
-<img width="1920" height="1080" alt="Screenshot From 2026-09-30 10-48-17" src="https://github.com/user-attachments/assets/2b65a5e0-7afc-44a3-a8e1-219215fb2c5b" />
 
 # Demo Code
 use you own textures and Panoramas (png and HDR)
