@@ -1,4 +1,4 @@
-# **Procedural Terrain Generator Based Game using Moden OpenGL**
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/638fade0-5b18-42b7-8535-f151788b590a" /># **Procedural Terrain Generator Based Game using Moden OpenGL**
 A beautifull 3D Fixed Terrain Generation (Perlin Noise) based game (graphics engine with movement controls)
 Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image for image handling and others..
 
@@ -14,6 +14,8 @@ new verion:
 <img width="1920" height="1080" alt="Screenshot From 2026-09-30 11-54-03" src="https://github.com/user-attachments/assets/df1cdf76-f1b2-4c4d-9ac5-2cea998f0848" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/3b43c0d8-952c-44d3-b254-6d54c94634bd" />
 <img width="1920" height="1080" alt="Screenshot From 2026-09-30 10-48-17" src="https://github.com/user-attachments/assets/8c3fd254-9e4b-44ee-a6c3-abd552941da7" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/73ca598c-f664-4596-ad7e-60bfce921067" />
+
 old version:
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f3ffdeab-faa8-443a-b2bd-3d36c32b81de" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/242c0160-3348-43c3-896a-9da0c6687416" />
