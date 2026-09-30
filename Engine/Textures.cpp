@@ -2,6 +2,10 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
+#include <algorithm>
+#include <iostream>
+#include <glm/glm.hpp>
+#include "libs/stb_image.h"
 
 namespace {
 // Periodic value noise: the lattice wraps every `period` cells so the texture tiles seamlessly
@@ -87,4 +91,89 @@ GLuint Textures::createWaterDetail(int size) {
     }
 
     return upload(px, size);
+}
+
+// Upload a texture array with a CPU-built mip chain. When `compressed` is supported the driver
+// compresses on upload (4-8x less memory bandwidth, which is what limits integrated GPUs).
+static void uploadArray(GLuint tex, std::vector<std::vector<unsigned char>>& layers, int W, int H, int C,
+                        GLenum compressed, GLenum plain, GLenum srcFormat, float aniso) {
+    glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    int levels = 1 + (int)std::floor(std::log2((float)std::max(W, H)));
+    GLenum internal = compressed ? compressed : plain;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        while (glGetError() != GL_NO_ERROR) {}
+        std::vector<std::vector<unsigned char>> cur = layers;
+        int w = W, h = H;
+        for (int l = 0; l < levels; ++l) {
+            glTexImage3D(GL_TEXTURE_2D_ARRAY, l, internal, w, h, (GLsizei)layers.size(), 0, srcFormat, GL_UNSIGNED_BYTE, nullptr);
+            for (size_t i = 0; i < cur.size(); ++i)
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, l, 0, 0, (GLint)i, w, h, 1, srcFormat, GL_UNSIGNED_BYTE, cur[i].data());
+            if (w == 1 && h == 1) { levels = l + 1; break; }
+            int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+            for (auto& img : cur) {   // 2x2 box filter
+                std::vector<unsigned char> next((size_t)nw * nh * C);
+                for (int y = 0; y < nh; ++y) for (int x = 0; x < nw; ++x) for (int c = 0; c < C; ++c) {
+                    int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1), y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
+                    int sum = img[((size_t)y0 * w + x0) * C + c] + img[((size_t)y0 * w + x1) * C + c]
+                            + img[((size_t)y1 * w + x0) * C + c] + img[((size_t)y1 * w + x1) * C + c];
+                    next[((size_t)y * nw + x) * C + c] = (unsigned char)((sum + 2) / 4);
+                }
+                img.swap(next);
+            }
+            w = nw; h = nh;
+        }
+        if (glGetError() == GL_NO_ERROR || internal == plain) break;
+        std::cerr << "Textures: texture compression unavailable, using uncompressed textures\n";
+        internal = plain;   // retry without compression
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, levels - 1);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    GLfloat maxAniso = 0.0f;
+    glGetFloatv(0x84FF /*GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT*/, &maxAniso);
+    if (maxAniso > 1.0f) glTexParameterf(GL_TEXTURE_2D_ARRAY, 0x84FE, glm::min(aniso, maxAniso));
+}
+
+
+GLuint Textures::loadMaterialArray(const std::string& dir, const char* const* names, int count, const char* suffix,
+                                   bool normals, float anisotropy) {
+    std::vector<std::vector<unsigned char>> layers;
+    int W = 0, H = 0;
+    stbi_set_flip_vertically_on_load(false);
+    for (int i = 0; i < count; ++i) {
+        int w = 0, h = 0, c = 0;
+        unsigned char* img = nullptr;
+        for (const char* ext : { ".jpg", ".png" }) {
+            std::string path = dir + "/" + names[i] + suffix + ext;
+            img = stbi_load(path.c_str(), &w, &h, &c, 3);
+            if (img) break;
+        }
+        if (!img || (i > 0 && (w != W || h != H))) {
+            std::cerr << "Textures: missing or wrong-size " << dir << "/" << names[i] << suffix << "\n";
+            if (img) stbi_image_free(img);
+            return 0;
+        }
+        W = w; H = h;
+        if (normals) {
+            std::vector<unsigned char> rg((size_t)w * h * 2);
+            for (size_t p = 0; p < (size_t)w * h; ++p) { rg[p * 2] = img[p * 3]; rg[p * 2 + 1] = img[p * 3 + 1]; }
+            layers.push_back(std::move(rg));
+        } else {
+            layers.emplace_back(img, img + (size_t)w * h * 3);
+        }
+        stbi_image_free(img);
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    if (normals)
+        uploadArray(tex, layers, W, H, 2, GL_COMPRESSED_RG_RGTC2, GL_RG8, GL_RG, anisotropy);
+    else
+        uploadArray(tex, layers, W, H, 3, GLEW_EXT_texture_compression_s3tc ? GL_COMPRESSED_RGB_S3TC_DXT1_EXT : 0,
+                    GL_RGB8, GL_RGB, anisotropy);
+    return tex;
 }

@@ -3,6 +3,7 @@
 #include <GL/glew.h>
 #include <string>
 #include <vector>
+#include <functional>
 
 // All user-tweakable settings for procedural terrain generation and shading.
 struct TerrainParams {
@@ -85,6 +86,10 @@ public:
 
     // Load the ground material set (grass/grass2/rock/sand/snow _albedo/_normal .jpg|.png)
     bool loadMaterials(const std::string& dir);
+
+    // Modify heights inside a world-space rectangle: fn(x, z, oldHeight) -> newHeight.
+    // Updates the height texture and LOD chunk bounds (call buildMinimap afterwards).
+    void editHeights(glm::vec2 wmin, glm::vec2 wmax, const std::function<float(float, float, float)>& fn);
 
     // Query ground height at world x,z (sea floor included)
     float getHeightAt(float wx, float wz) const;

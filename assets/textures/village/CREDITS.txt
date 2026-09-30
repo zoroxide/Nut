@@ -1,0 +1,4 @@
+Village textures from Poly Haven (CC0, https://polyhaven.com):
+ plaster = plastered_wall_02, stone = rustic_stone_wall, roof = clay_roof_tiles_02,
+ interior = painted_plaster_wall, floor = oak_wood_planks, wood = dark_wooden_planks,
+ painted = blue_painted_planks, fabric = poly_wool_herringbone

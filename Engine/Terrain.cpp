@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <iostream>
 #include "libs/stb_image.h"
+#include "Textures.h"
 
 Terrain::~Terrain() {
     if (vbo_) glDeleteBuffers(1, &vbo_);
@@ -488,94 +489,36 @@ void Terrain::buildMinimap(int res, const std::vector<glm::vec3>* trees) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
-// Upload a texture array with a CPU-built mip chain. When `compressed` is supported the driver
-// compresses on upload (4-8x less memory bandwidth, which is what limits integrated GPUs).
-static void uploadArray(GLuint tex, std::vector<std::vector<unsigned char>>& layers, int W, int H, int C,
-                        GLenum compressed, GLenum plain, GLenum srcFormat, float aniso) {
-    glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    int levels = 1 + (int)std::floor(std::log2((float)std::max(W, H)));
-    GLenum internal = compressed ? compressed : plain;
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        while (glGetError() != GL_NO_ERROR) {}
-        std::vector<std::vector<unsigned char>> cur = layers;
-        int w = W, h = H;
-        for (int l = 0; l < levels; ++l) {
-            glTexImage3D(GL_TEXTURE_2D_ARRAY, l, internal, w, h, (GLsizei)layers.size(), 0, srcFormat, GL_UNSIGNED_BYTE, nullptr);
-            for (size_t i = 0; i < cur.size(); ++i)
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, l, 0, 0, (GLint)i, w, h, 1, srcFormat, GL_UNSIGNED_BYTE, cur[i].data());
-            if (w == 1 && h == 1) { levels = l + 1; break; }
-            int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
-            for (auto& img : cur) {   // 2x2 box filter
-                std::vector<unsigned char> next((size_t)nw * nh * C);
-                for (int y = 0; y < nh; ++y) for (int x = 0; x < nw; ++x) for (int c = 0; c < C; ++c) {
-                    int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1), y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
-                    int sum = img[((size_t)y0 * w + x0) * C + c] + img[((size_t)y0 * w + x1) * C + c]
-                            + img[((size_t)y1 * w + x0) * C + c] + img[((size_t)y1 * w + x1) * C + c];
-                    next[((size_t)y * nw + x) * C + c] = (unsigned char)((sum + 2) / 4);
-                }
-                img.swap(next);
-            }
-            w = nw; h = nh;
-        }
-        if (glGetError() == GL_NO_ERROR || internal == plain) break;
-        std::cerr << "Terrain: texture compression unavailable, using uncompressed textures\n";
-        internal = plain;   // retry without compression
-    }
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, levels - 1);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    GLfloat maxAniso = 0.0f;
-    glGetFloatv(0x84FF /*GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT*/, &maxAniso);
-    if (maxAniso > 1.0f) glTexParameterf(GL_TEXTURE_2D_ARRAY, 0x84FE, glm::min(aniso, maxAniso));
-}
-
 bool Terrain::loadMaterials(const std::string& dir) {
-    static const char* names[5] = { "grass", "grass2", "rock", "sand", "snow" };
     // Albedo: RGB (DXT1 compressed). Normals: only X/Y are stored (RGTC2); the shader rebuilds Z.
-    auto loadArray = [&](const char* suffix, GLuint& tex, bool normals) -> bool {
-        std::vector<std::vector<unsigned char>> layers;
-        int W = 0, H = 0;
-        stbi_set_flip_vertically_on_load(false);
-        for (int i = 0; i < 5; ++i) {
-            int w = 0, h = 0, c = 0;
-            unsigned char* img = nullptr;
-            for (const char* ext : { ".jpg", ".png" }) {
-                std::string path = dir + "/" + names[i] + suffix + ext;
-                img = stbi_load(path.c_str(), &w, &h, &c, 3);
-                if (img) break;
-            }
-            if (!img || (i > 0 && (w != W || h != H))) { if (img) stbi_image_free(img); return false; }
-            W = w; H = h;
-            if (normals) {
-                std::vector<unsigned char> rg((size_t)w * h * 2);
-                for (size_t p = 0; p < (size_t)w * h; ++p) { rg[p * 2] = img[p * 3]; rg[p * 2 + 1] = img[p * 3 + 1]; }
-                layers.push_back(std::move(rg));
-            } else {
-                layers.emplace_back(img, img + (size_t)w * h * 3);
-            }
-            stbi_image_free(img);
-        }
-        if (tex) glDeleteTextures(1, &tex);
-        glGenTextures(1, &tex);
-        if (normals)
-            uploadArray(tex, layers, W, H, 2, GL_COMPRESSED_RG_RGTC2, GL_RG8, GL_RG, 2.0f);
-        else
-            uploadArray(tex, layers, W, H, 3, GLEW_EXT_texture_compression_s3tc ? GL_COMPRESSED_RGB_S3TC_DXT1_EXT : 0,
-                        GL_RGB8, GL_RGB, 4.0f);
-        return true;
-    };
-    bool ok = loadArray("_albedo", matAlbedo_, false) && loadArray("_normal", matNormal_, true);
-    if (!ok) {
+    static const char* names[6] = { "grass", "grass2", "rock", "sand", "snow", "path" };
+    if (matAlbedo_) glDeleteTextures(1, &matAlbedo_);
+    if (matNormal_) glDeleteTextures(1, &matNormal_);
+    matAlbedo_ = Textures::loadMaterialArray(dir, names, 6, "_albedo", false, 4.0f);
+    matNormal_ = matAlbedo_ ? Textures::loadMaterialArray(dir, names, 6, "_normal", true, 2.0f) : 0;
+    if (!matAlbedo_ || !matNormal_) {
         std::cerr << "Terrain: could not load materials from " << dir << " (using flat colours)\n";
         if (matAlbedo_) { glDeleteTextures(1, &matAlbedo_); matAlbedo_ = 0; }
         if (matNormal_) { glDeleteTextures(1, &matNormal_); matNormal_ = 0; }
+        return false;
     }
-    return ok;
+    return true;
+}
+
+void Terrain::editHeights(glm::vec2 wmin, glm::vec2 wmax, const std::function<float(float, float, float)>& fn) {
+    if (heights_.empty()) return;
+    const int N = size_;
+    const float half = getHalfExtent();
+    int x0 = std::max(0, (int)std::floor((wmin.x + half) / scale_)), x1 = std::min(N - 1, (int)std::ceil((wmax.x + half) / scale_));
+    int z0 = std::max(0, (int)std::floor((wmin.y + half) / scale_)), z1 = std::min(N - 1, (int)std::ceil((wmax.y + half) / scale_));
+    for (int z = z0; z <= z1; ++z) for (int x = x0; x <= x1; ++x) {
+        float& h = heights_[(size_t)z * N + x];
+        h = fn(x * scale_ - half, z * scale_ - half, h);
+    }
+    glBindTexture(GL_TEXTURE_2D, heightTex_);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, N, N, 0, GL_RED, GL_FLOAT, heights_.data());
+    buildChunks();
 }
 
 // --- Presets ---

@@ -1,5 +1,6 @@
 #pragma once
 #include <GL/glew.h>
+#include <string>
 
 // Procedurally generated helper textures (created once at startup)
 namespace Textures {
@@ -7,4 +8,9 @@ namespace Textures {
 GLuint createNoise(int size = 256);
 // Tileable water ripple detail: rg = normal xz (0.5 centred), b = foam noise, a = height. Mipmapped.
 GLuint createWaterDetail(int size = 256);
+// Load `count` same-sized images <dir>/<name><suffix>.jpg|.png into a mipmapped texture array.
+// Colour maps are DXT1-compressed; normal maps keep only X/Y (RGTC2) - shaders rebuild Z.
+// Returns 0 if any image is missing or the sizes differ.
+GLuint loadMaterialArray(const std::string& dir, const char* const* names, int count, const char* suffix,
+                         bool normals, float anisotropy);
 }
