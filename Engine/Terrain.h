@@ -49,7 +49,7 @@ struct TerrainParams {
     float snowLine = 0.78f;
     float snowBlend = 0.08f;
     float textureScale = 1.0f;   // world-space size multiplier of the ground textures
-    glm::vec3 grassTint{1.0f, 1.0f, 1.0f};
+    glm::vec3 grassTint{0.78f, 1.0f, 0.62f};   // the meadow texture is olive; pull it towards green
     glm::vec3 sandTint{1.0f, 1.0f, 1.0f};
     glm::vec3 rockTint{1.0f, 1.0f, 1.0f};
     glm::vec3 snowTint{1.0f, 1.0f, 1.0f};
@@ -95,15 +95,29 @@ public:
     float getWaterSurfaceAt(float wx, float wz, float t) const;
     // Half the terrain width in world units
     float getHalfExtent() const { return (size_ - 1) * 0.5f * scale_; }
+    float getHeightScale() const { return heightScale_; }
+    GLuint heightTexture() const { return heightTex_; }
+
+    // (Re)build the minimap; optional tree dots are (x, z, canopy radius) in world units
+    void buildMinimap(int res, const std::vector<glm::vec3>* trees = nullptr);
     const TerrainParams& params() const { return params_; }
     // Apply settings that don't need regeneration (waves, materials, fog). Shape settings
     // (incl. sea level) only take effect on the next generateProcedural().
     void setLiveParams(const TerrainParams& p) { params_ = p; }
 
+    // Shaded relief map of the island for the HUD minimap (0 when there is none).
+    // Texture u runs along world +X, v along world +Z, covering the whole terrain.
+    GLuint minimapTexture() const { return isFlat_ ? 0 : minimapTex_; }
+
     // Ocean: drawn after all opaque objects, with its own shader (water_vert/water_frag)
     void drawWater(GLuint waterProgram, const glm::mat4& view, const glm::mat4& proj, const glm::vec3& cameraPos, float time);
 
-    // Draw currently configured terrain using given shader and matrices
+    // Chunked LOD settings: distance (metres) at which chunks drop to half resolution
+    void setLodDistance(float d) { lodDistance_ = d; }
+    int lastDrawnTriangles() const { return drawnTriangles_; }
+
+    // Draw currently configured terrain using given shader and matrices.
+    // Procedural terrain needs the terrain_vert/terrain_frag program; the flat plane uses the plain one.
     void draw(GLuint shaderProgram, const glm::mat4& model, const glm::mat4& view, const glm::mat4& proj, const glm::vec3& cameraPos);
 
     // Configure tiling and scale for flat draw
@@ -137,6 +151,22 @@ private:
 
     // Ground materials (texture arrays: 0 grass, 1 grass2, 2 rock, 3 sand, 4 snow)
     GLuint matAlbedo_ = 0, matNormal_ = 0;
+
+    GLuint minimapTex_ = 0;
+
+    // Chunked LOD rendering: a small patch mesh per LOD level, instanced per chunk.
+    // Heights come from heightTex in the vertex shader, normals are computed per pixel.
+    static const int kChunkCells = 64, kLods = 5;
+    struct Patch { GLuint vao = 0, vbo = 0, ebo = 0; GLsizei count = 0; };
+    struct Chunk { int gx, gz; float minY, maxY; };
+    Patch patches_[kLods];
+    std::vector<Chunk> chunks_;
+    GLuint chunkInstVBO_ = 0;
+    float lodDistance_ = 110.0f;
+    int drawnTriangles_ = 0;
+    void buildPatches();
+    void buildChunks();
+    void drawChunks(GLuint prog, const glm::mat4& view, const glm::mat4& proj, const glm::vec3& cameraPos);
 
     // Config for procedural generation
     int size_ = 512;

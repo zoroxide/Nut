@@ -40,6 +40,11 @@ public:
     glm::vec3 lightColor() const;
 
     // --- Runtime settings ---
+    // Manual sun (used instead of the one detected in the panorama when enabled)
+    bool sunOverride = false;
+    glm::vec3 overrideLightDir{0.0f, -1.0f, 0.0f};   // direction light travels
+    glm::vec3 overrideLightColor{1.0f};
+
     float exposure = 1.0f;
     float rotationDeg = 0.0f;  // spins the panorama around the vertical axis
     float blur = 0.0f;         // mip bias for a softer, out-of-focus sky

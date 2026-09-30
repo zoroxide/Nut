@@ -1,0 +1,108 @@
+// ---------------------------------------------------------------------------
+// Shared lighting / atmosphere code, included by the scene shaders.
+// Texture units: 3 sky cube, 8 noise, 10 sun shadow height map.
+// ---------------------------------------------------------------------------
+uniform vec3 lightDir;        // direction the sunlight travels
+uniform vec3 lightColor;
+uniform vec3 viewPos;
+uniform float time;
+
+uniform vec3 fogColor;
+uniform float fogDensity;     // distance haze
+uniform float fogHeightDensity;
+uniform float fogHeightFalloff;
+uniform float fogBaseY;       // height fog is thickest below this altitude
+uniform float sunGlow;        // how much the haze lights up towards the sun
+
+uniform int underwater;
+uniform vec3 uwColor;
+
+uniform samplerCube skyTex;
+uniform int hasSky;
+uniform mat3 skyRot;
+uniform float skyExposure;
+uniform int skyHDR;
+uniform float skyMaxLod;
+uniform int fogFromSky;
+
+uniform sampler2D sunShadowTex;   // per texel: height above which a point sees the sun
+uniform int hasSunShadow;
+uniform float shadowHalf;         // half size of the area it covers (world units)
+uniform float shadowStrength;
+
+uniform sampler2D noiseTex;       // tileable noise, 4 octaves in r,g,b,a
+
+vec3 aces(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+// Sky radiance in direction d as display colour (same transform as the sky shader)
+vec3 skyColor(vec3 d, float lod) {
+    vec3 c = textureLod(skyTex, skyRot * d, lod).rgb * skyExposure;
+    if (skyHDR == 1) c = aces(c);
+    return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+}
+
+// Diffuse light from the sky hemisphere around normal n
+vec3 skyAmbient(vec3 n) {
+    if (hasSky == 1) return skyColor(normalize(n + vec3(0.0, 0.6, 0.0)), max(skyMaxLod - 1.0, 0.0)) * 0.9;
+    return mix(vec3(0.30, 0.28, 0.24), vec3(0.50, 0.62, 0.80), n.y * 0.5 + 0.5);
+}
+
+// Cheap noise from the tileable noise texture (0..1). One fetch instead of dozens of sin() calls.
+float noiseMacro(vec2 p) { return texture(noiseTex, p).r; }
+vec4 noise4(vec2 p) { return texture(noiseTex, p); }
+
+// Sun visibility (1 lit, 0 in shadow) for a world-space point, with a soft penumbra that grows
+// with the height of the blocker above the point
+float sunShadow(vec3 p) {
+    if (hasSunShadow == 0) return 1.0;
+    vec2 uv = p.xz / (2.0 * shadowHalf) + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
+    float need = texture(sunShadowTex, uv).r;
+    float s = smoothstep(need - 0.3, need + 1.2 + 0.08 * max(need - p.y, 0.0), p.y);
+    return mix(1.0, s, shadowStrength);
+}
+
+vec3 fogBaseColor(vec3 rd) {
+    vec3 fc = fogColor;
+    if (hasSky == 1 && fogFromSky == 1)
+        fc = skyColor(normalize(vec3(rd.x, 0.04 + max(rd.y, 0.0) * 0.5, rd.z)), max(skyMaxLod - 4.0, 0.0));
+    // Haze glows around the sun (forward scattering)
+    vec3 sunDir = normalize(-lightDir);
+    fc += lightColor * pow(max(dot(rd, sunDir), 0.0), 8.0) * sunGlow;
+    return fc;
+}
+
+// Distance haze + height fog (thicker in valleys and over the sea), or underwater murk
+vec3 applyFog(vec3 color, vec3 worldPos) {
+    vec3 ray = worldPos - viewPos;
+    float dist = length(ray);
+    vec3 rd = ray / max(dist, 1e-4);
+    if (underwater == 1) {
+        float f = 1.0 - exp(-dist * 0.035);
+        return mix(color * vec3(0.6, 0.9, 1.0), uwColor, f);
+    }
+    float fd = 1.0 - exp(-pow(fogDensity * dist, 2.0));
+    // Analytic integral of density * exp(-falloff * (y - base)) along the view ray
+    float h0 = max(viewPos.y - fogBaseY, -20.0);
+    float k = fogHeightFalloff * rd.y * dist;
+    float integral = abs(k) > 1e-3 ? (1.0 - exp(-k)) / k : 1.0;
+    float fh = 1.0 - exp(-fogHeightDensity * exp(-fogHeightFalloff * h0) * dist * integral);
+    float f = clamp(1.0 - (1.0 - fd) * (1.0 - fh), 0.0, 1.0);
+    return mix(color, fogBaseColor(rd), f);
+}
+
+// Just the fog amount (for transparent surfaces that also need alpha)
+float fogAmount(vec3 worldPos) {
+    vec3 ray = worldPos - viewPos;
+    float dist = length(ray);
+    vec3 rd = ray / max(dist, 1e-4);
+    float fd = 1.0 - exp(-pow(fogDensity * dist, 2.0));
+    float h0 = max(viewPos.y - fogBaseY, -20.0);
+    float k = fogHeightFalloff * rd.y * dist;
+    float integral = abs(k) > 1e-3 ? (1.0 - exp(-k)) / k : 1.0;
+    float fh = 1.0 - exp(-fogHeightDensity * exp(-fogHeightFalloff * h0) * dist * integral);
+    return clamp(1.0 - (1.0 - fd) * (1.0 - fh), 0.0, 1.0);
+}

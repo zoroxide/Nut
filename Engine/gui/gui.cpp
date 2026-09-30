@@ -118,6 +118,12 @@ void GUI::drawSkyPanel() {
         ImGui::SliderFloat("Rotation", &sky.rotationDeg, 0.0f, 360.0f, "%.0f deg");
         ImGui::SliderFloat("Blur", &sky.blur, 0.0f, 6.0f);
         ImGui::Checkbox("Sun & light from sky", &engine_->sunFromSky());
+        if (!engine_->sunFromSky()) {
+            ImGui::SliderFloat("Sun Elevation", &engine_->sunElevation(), -5.0f, 90.0f, "%.0f deg");
+            ImGui::SliderFloat("Sun Direction", &engine_->sunAzimuth(), 0.0f, 360.0f, "%.0f deg");
+            ImGui::SliderFloat("Sun Intensity", &engine_->sunIntensity(), 0.1f, 2.0f);
+            ImGui::ColorEdit3("Sun Colour", &engine_->sunTint().x);
+        }
         ImGui::SameLine();
         ImGui::Checkbox("Fog from sky", &engine_->fogFromSky());
     }
@@ -134,6 +140,87 @@ void GUI::drawSkyPanel() {
         float cop = engine_->getCloudOpacity();
         if (ImGui::SliderFloat("Cloud Opacity", &cop, 0.0f, 1.0f)) engine_->setCloudOpacity(cop);
     }
+}
+
+void GUI::drawGraphicsPanel() {
+    if (!ImGui::CollapsingHeader("Graphics & Performance", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    GraphicsSettings& G = engine_->graphics();
+    static int quality = 1;
+    const char* levels[] = { "Low", "Medium", "High" };
+    if (ImGui::Combo("Quality", &quality, levels, 3)) G = GraphicsSettings::preset(quality);
+
+    // Live numbers: resolution scale and GPU time per pass
+    const GpuTimers& T = engine_->gpuTimers();
+    ImGui::Text("Render scale %.0f%%   GPU %.1f ms", engine_->renderScale() * 100.0f, T.totalMs());
+    if (ImGui::TreeNode("GPU time per pass")) {
+        for (const auto& n : T.names()) ImGui::Text("%-12s %5.2f ms", n.c_str(), T.ms(n));
+        ImGui::Text("terrain triangles %d, trees %d full + %d billboards", engine_->terrainTriangles(),
+                    engine_->treesDrawn(), engine_->impostorsDrawn());
+        ImGui::TreePop();
+    }
+
+    ImGui::Checkbox("Auto Resolution", &G.autoResolution);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lowers the 3D resolution when needed to hold the target FPS");
+    if (G.autoResolution) {
+        ImGui::SliderFloat("Target FPS", &G.targetFps, 30.0f, 144.0f, "%.0f");
+        ImGui::SliderFloat("Min Scale", &G.minScale, 0.4f, 1.0f, "%.2f");
+    } else {
+        ImGui::SliderFloat("Render Scale", &G.renderScale, 0.4f, 1.0f, "%.2f");
+    }
+    ImGui::SliderFloat("Terrain Detail (m)", &G.terrainLodDistance, 40.0f, 300.0f, "%.0f");
+
+    if (ImGui::TreeNode("Lighting & Atmosphere")) {
+        ImGui::Checkbox("Sun Shadows", &G.shadows);
+        if (G.shadows) ImGui::SliderFloat("Shadow Strength", &G.shadowStrength, 0.0f, 1.0f);
+        ImGui::SliderFloat("Valley Fog", &G.fogHeightDensity, 0.0f, 0.02f, "%.4f");
+        ImGui::SliderFloat("Fog Height Falloff", &G.fogHeightFalloff, 0.005f, 0.2f, "%.3f");
+        ImGui::SliderFloat("Sun Glow in Haze", &G.sunGlow, 0.0f, 1.0f);
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Post Effects")) {
+        ImGui::Checkbox("Bloom", &G.bloom);
+        if (G.bloom) {
+            ImGui::SliderFloat("Bloom Intensity", &G.bloomIntensity, 0.0f, 1.0f);
+            ImGui::SliderFloat("Bloom Threshold", &G.bloomThreshold, 0.5f, 1.2f);
+        }
+        ImGui::Checkbox("Sun Rays", &G.godRays);
+        if (G.godRays) ImGui::SliderFloat("Sun Ray Intensity", &G.godRayIntensity, 0.0f, 1.5f);
+        ImGui::Checkbox("FXAA (anti-aliasing)", &G.fxaa);
+        ImGui::SliderFloat("Sharpen", &G.sharpen, 0.0f, 1.0f);
+        ImGui::Checkbox("Vignette", &G.vignette);
+        ImGui::Checkbox("Underwater Wobble", &G.underwaterWobble);
+        ImGui::SliderFloat("Exposure", &G.exposure, 0.5f, 1.8f);
+        ImGui::SliderFloat("Contrast", &G.contrast, 0.8f, 1.4f);
+        ImGui::SliderFloat("Saturation", &G.saturation, 0.5f, 1.6f);
+        ImGui::SliderFloat("Warmth", &G.warmth, -0.2f, 0.2f);
+        ImGui::TreePop();
+    }
+}
+
+void GUI::drawFoliagePanel() {
+    if (!ImGui::CollapsingHeader("Grass & Trees", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    FoliageParams& F = engine_->foliageParams();
+    ImGui::Checkbox("Grass", &F.grassEnabled);
+    if (F.grassEnabled) {
+        ImGui::SliderFloat("Grass Density", &F.grassDensity, 0.3f, 2.5f, "%.1fx");
+        ImGui::SliderFloat("Grass Distance (m)", &F.grassRadius, 12.0f, 90.0f, "%.0f");
+        ImGui::SliderFloat("Grass Height (m)", &F.grassHeight, 0.15f, 1.5f);
+        ImGui::Checkbox("Wildflowers", &F.flowers);
+    }
+    ImGui::SliderFloat("Wind Strength", &F.windStrength, 0.0f, 2.0f);
+    ImGui::Separator();
+    bool replant = ImGui::Checkbox("Trees", &F.treesEnabled);
+    if (F.treesEnabled) {
+        replant |= ImGui::SliderFloat("Forest Density", &F.treeDensity, 0.0f, 1.0f) && !ImGui::IsMouseDown(0);
+        if (ImGui::IsItemDeactivatedAfterEdit()) replant = true;
+        ImGui::SliderFloat("Tree Draw Distance (m)", &F.treeDistance, 100.0f, 2000.0f, "%.0f");
+        ImGui::SliderFloat("Full Detail Trees (m)", &F.treeDetailDistance, 20.0f, 400.0f, "%.0f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Beyond this distance trees are drawn as lit billboards (much faster)");
+        ImGui::Text("%d trees", engine_->getTreeCount());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Replant")) replant = true;
+    }
+    if (replant) engine_->replantTrees();
 }
 
 void GUI::drawTerrainPanel() {
@@ -228,6 +315,84 @@ void GUI::drawTerrainPanel() {
     if (rebuild) { pending = false; engine_->regenerateTerrain(); }
 }
 
+// Minimap: bottom-left, north up, the whole island with the player's position and view direction.
+// Press M to switch between small and large.
+void GUI::drawMinimap() {
+    const Terrain& terrain = engine_->terrain();
+    GLuint tex = terrain.minimapTexture();
+    if (!tex) return;
+
+    static bool large = false;
+    if (ImGui::IsKeyPressed(ImGuiKey_M, false) && !ImGui::GetIO().WantTextInput) large = !large;
+
+    ImGuiIO& io = ImGui::GetIO();
+    float size = std::floor(std::min(io.DisplaySize.x, io.DisplaySize.y) * (large ? 0.6f : 0.26f));
+    const float margin = 14.0f, pad = 6.0f, footer = 18.0f;
+    ImVec2 winPos(margin, io.DisplaySize.y - margin - size - 2 * pad - footer);
+    ImGui::SetNextWindowPos(winPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(size + 2 * pad, size + 2 * pad + footer), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad));
+    ImGui::Begin("##minimap", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
+                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImVec2 p1(p0.x + size, p0.y + size);
+    dl->AddImageRounded(ImTextureRef((ImTextureID)tex), p0, p1, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, 6.0f);
+    dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 90), 6.0f, 0, 1.5f);
+
+    // World -> map. Texture u follows +X and v follows +Z, so north (-Z) is up.
+    float half = terrain.getHalfExtent();
+    const glm::vec3& pos = engine_->getPlayerPos();
+    auto toMap = [&](float wx, float wz) {
+        return ImVec2(p0.x + (wx / (2.0f * half) + 0.5f) * size, p0.y + (wz / (2.0f * half) + 0.5f) * size);
+    };
+    ImVec2 c = toMap(pos.x, pos.z);
+    c.x = std::clamp(c.x, p0.x + 4.0f, p1.x - 4.0f);   // stay on the edge when out at sea
+    c.y = std::clamp(c.y, p0.y + 4.0f, p1.y - 4.0f);
+
+    // Facing direction (same convention as the camera: forward = (cos yaw, sin yaw) on XZ)
+    float yaw = glm::radians(engine_->getYaw());
+    ImVec2 f(std::cos(yaw), std::sin(yaw));
+    ImVec2 r(-f.y, f.x);
+
+    // View cone
+    float fov = glm::radians(30.0f), reach = size * 0.16f;
+    ImVec2 cl(c.x + (f.x * std::cos(fov) - f.y * std::sin(fov)) * reach, c.y + (f.y * std::cos(fov) + f.x * std::sin(fov)) * reach);
+    ImVec2 cr(c.x + (f.x * std::cos(fov) + f.y * std::sin(fov)) * reach, c.y + (f.y * std::cos(fov) - f.x * std::sin(fov)) * reach);
+    dl->PushClipRect(p0, p1, true);
+    dl->AddTriangleFilled(c, cl, cr, IM_COL32(255, 255, 255, 45));
+
+    // Player arrow with a dark outline so it reads on sand, grass and water
+    float a = large ? 11.0f : 8.0f;
+    ImVec2 tip(c.x + f.x * a, c.y + f.y * a);
+    ImVec2 left(c.x - f.x * a * 0.7f + r.x * a * 0.65f, c.y - f.y * a * 0.7f + r.y * a * 0.65f);
+    ImVec2 right(c.x - f.x * a * 0.7f - r.x * a * 0.65f, c.y - f.y * a * 0.7f - r.y * a * 0.65f);
+    ImVec2 notch(c.x - f.x * a * 0.3f, c.y - f.y * a * 0.3f);
+    dl->AddQuadFilled(tip, right, notch, left, engine_->isSwimming() ? IM_COL32(80, 200, 255, 255) : IM_COL32(255, 70, 50, 255));
+    dl->AddQuad(tip, right, notch, left, IM_COL32(20, 20, 20, 220), 1.5f);
+    dl->PopClipRect();
+
+    // North marker
+    ImVec2 n(p0.x + size * 0.5f, p0.y + 3.0f);
+    dl->AddTriangleFilled(ImVec2(n.x, n.y), ImVec2(n.x - 5.0f, n.y + 9.0f), ImVec2(n.x + 5.0f, n.y + 9.0f), IM_COL32(255, 255, 255, 220));
+    dl->AddText(ImVec2(n.x - 4.0f, n.y + 10.0f), IM_COL32(255, 255, 255, 230), "N");
+
+    // Footer: altitude above sea level + key hints
+    ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y + 3.0f));
+    float alt = pos.y - 1.7f - terrain.getWaterY();
+    ImGui::TextColored(ImVec4(1, 1, 1, 0.85f), "%+.0f m", alt);
+    ImGui::SameLine();
+    ImGui::TextDisabled(large ? " Tab: settings   M: smaller map" : " Tab menu  M map");
+    ImGui::SameLine();
+    ImGui::TextDisabled(" %.0f fps", ImGui::GetIO().Framerate);
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
 void GUI::render() {
     if (!initialized_) return;
 
@@ -254,7 +419,13 @@ void GUI::render() {
         ImGui::End();
     }
 
-    ImGui::Begin("Engine Controls");
+    drawMinimap();
+
+    // Settings panel: hidden until TAB is pressed
+    if (engine_->isGuiVisible()) {
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 470.0f, 10.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(460.0f, ImGui::GetIO().DisplaySize.y - 20.0f), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Engine Controls  (Tab to hide)");
 
     // Performance
     {
@@ -272,6 +443,8 @@ void GUI::render() {
             engine_->vsync(vsMode == 1);
         }
     }
+
+    drawGraphicsPanel();
 
     ImGui::Separator();
 
@@ -326,8 +499,10 @@ void GUI::render() {
     if (ImGui::InputFloat("Texture Tile", &tt)) engine_->setTextureTile(tt);
 
     drawTerrainPanel();
+    drawFoliagePanel();
 
     ImGui::End();
+    }
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -I./Engine -I./Engine/gui -I./Engine/libs/imgui -I./Engine/libs/imgui/backends
+CXXFLAGS = -std=c++17 -O2 -Wall -I./Engine -I./Engine/gui -I./Engine/libs/imgui -I./Engine/libs/imgui/backends
 LIBS = -lGLEW -lglfw -lGL -ldl -lpthread -lm -lassimp -Wl,--copy-dt-needed-entries
 
 SRC = main.cpp \
@@ -8,6 +8,10 @@ SRC = main.cpp \
       Engine/Shaders.cpp \
       Engine/ECS.cpp \
       Engine/Terrain.cpp \
+      Engine/Foliage.cpp \
+      Engine/Textures.cpp \
+      Engine/SunShadow.cpp \
+      Engine/PostProcess.cpp \
       Engine/Skybox.cpp \
       Engine/Models.cpp \
       Engine/Renderer.cpp \

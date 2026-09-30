@@ -15,6 +15,10 @@
 #include "Shaders.h"
 #include "libs/imgui/imgui.h"
 #include "Terrain.h"
+#include "Foliage.h"
+#include "Graphics.h"
+#include "SunShadow.h"
+#include "PostProcess.h"
 #include "Skybox.h"
 #include "Models.h"
 #include "Renderer.h"
@@ -47,6 +51,16 @@ private:
     GLFWwindow* window_;
     GLuint shaderProgram_;
     GLuint waterShader_ = 0;
+    GLuint grassShader_ = 0, treeShader_ = 0;
+    GLuint terrainShader_ = 0;           // chunked LOD terrain
+    GLuint impostorShader_ = 0, treeBakeShader_ = 0, sunShadowShader_ = 0;
+    SunShadow sunShadow_;
+    PostProcess post_;
+    GpuTimers gpuTimers_;
+    void setupSamplerUnits();
+    double lastShadowBuild_ = -1.0;
+    GLuint noiseTex_ = 0, waterDetailTex_ = 0;
+    GraphicsSettings graphics_;
 
     // Sky renderer
     GLuint skyShader_;
@@ -105,6 +119,8 @@ private:
 
     // Subsystems
     Terrain terrain_;
+    Foliage foliage_;
+    FoliageParams foliageParams_;
     Models models_;
     Renderer renderer_;
 
@@ -125,6 +141,9 @@ private:
     float cloudScale_;
     float cloudOpacity_;
     bool sunFromSky_ = true;
+    bool guiVisible_ = false;
+    float sunElevation_ = 40.0f, sunAzimuth_ = 35.0f, sunIntensity_ = 1.0f;
+    glm::vec3 sunTint_{1.0f, 0.96f, 0.88f};
 
     // Swimming state
     bool swimming_ = false;
@@ -165,6 +184,36 @@ public: // Public API
     Skybox& sky() { return sky_; }
     bool& sunFromSky() { return sunFromSky_; }
     bool& fogFromSky() { return fogFromSky_; }
+    // Manual sun (when "sun from sky" is off): elevation / azimuth in degrees, intensity
+    float& sunElevation() { return sunElevation_; }
+    float& sunAzimuth() { return sunAzimuth_; }
+    float& sunIntensity() { return sunIntensity_; }
+    glm::vec3& sunTint() { return sunTint_; }
+
+    // Rendering quality / post-processing
+    GraphicsSettings& graphics() { return graphics_; }
+    const GpuTimers& gpuTimers() const { return gpuTimers_; }
+    float renderScale() const { return post_.scale(); }
+    int terrainTriangles() const { return terrain_.lastDrawnTriangles(); }
+    int treesDrawn() const { return foliage_.lastDrawnMeshTrees(); }
+    int impostorsDrawn() const { return foliage_.lastDrawnImpostors(); }
+
+    // Render one frame of the 3D world (with post-processing) into outputFbo (0 = window)
+    void renderFrame(GLuint outputFbo, int outW, int outH);
+
+    // Grass & trees
+    FoliageParams& foliageParams() { return foliageParams_; }
+    void replantTrees();
+    int getTreeCount() const { return foliage_.treeCount(); }
+
+    // Settings panel (Tab) visibility; the HUD and minimap are always drawn
+    bool isGuiVisible() const { return guiVisible_; }
+    void setGuiVisible(bool v);
+
+    // Player / minimap
+    const Terrain& terrain() const { return terrain_; }
+    const glm::vec3& getPlayerPos() const { return cameraPos_; }
+    float getYaw() const { return yaw_; }
 
     // Player / swimming status for the HUD
     bool isSwimming() const { return swimming_; }

@@ -20,6 +20,7 @@ void main() {
     // interpolates correctly; normalizing per vertex warps the sky. The fragment shader normalizes.
     vDir = mat3(invView) * eye.xyz;
 
-    // we still must output a clip position
-    gl_Position = vec4(aPos, 0.0, 1.0);
+    // Placed on the far plane: drawn after the terrain with depth test LEQUAL, only pixels
+    // not covered by geometry get shaded
+    gl_Position = vec4(aPos, 1.0, 1.0);
 }

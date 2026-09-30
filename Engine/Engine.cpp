@@ -1,4 +1,6 @@
 #include "Engine.h"
+#include "Textures.h"
+#include "PostProcess.h"
 #include "gui/gui.h"
 
 #define GLM_ENABLE_EXPERIMENTAL
@@ -135,16 +137,44 @@ bool Engine::init(bool fullscreen) {
   waterShader_ = shaders_.loadProgram("water", "Engine/shaders/water_vert.glsl",
                                       "Engine/shaders/water_frag.glsl");
   terrain_.loadMaterials("assets/textures/terrain");
+  grassShader_ = shaders_.loadProgram("grass", "Engine/shaders/grass_vert.glsl",
+                                      "Engine/shaders/grass_frag.glsl");
+  treeShader_ = shaders_.loadProgram("tree", "Engine/shaders/tree_vert.glsl",
+                                     "Engine/shaders/tree_frag.glsl");
+  treeBakeShader_ = shaders_.loadProgram("treeBake", "Engine/shaders/tree_vert.glsl",
+                                        "Engine/shaders/tree_bake_frag.glsl");
+  impostorShader_ = shaders_.loadProgram("impostor", "Engine/shaders/impostor_vert.glsl",
+                                        "Engine/shaders/impostor_frag.glsl");
+  sunShadowShader_ = shaders_.loadProgram("sunShadow", "Engine/shaders/fullscreen_vert.glsl",
+                                         "Engine/shaders/sun_shadow_frag.glsl");
+  sunShadow_.init(sunShadowShader_, 1024);
+  PostProcess::Programs pp;
+  pp.bright = shaders_.loadProgram("postBright", "Engine/shaders/fullscreen_vert.glsl", "Engine/shaders/post_bright.glsl");
+  pp.blur = shaders_.loadProgram("postBlur", "Engine/shaders/fullscreen_vert.glsl", "Engine/shaders/post_blur.glsl");
+  pp.rays = shaders_.loadProgram("postRays", "Engine/shaders/fullscreen_vert.glsl", "Engine/shaders/post_rays.glsl");
+  pp.composite = shaders_.loadProgram("postComposite", "Engine/shaders/fullscreen_vert.glsl", "Engine/shaders/post_composite.glsl");
+  post_.init(pp);
+  FoliagePrograms fp;
+  fp.grass = grassShader_;
+  fp.tree = treeShader_;
+  fp.treeBake = treeBakeShader_;
+  fp.impostor = impostorShader_;
+  foliage_.init("assets/textures/foliage", fp);
   sky_.initFullscreenTriangle();
 
   // Renderer programs and scene wiring
-  renderer_.setPrograms(shaderProgram_, skyShader_);
+  terrainShader_ = shaders_.loadProgram("terrainLod", "Engine/shaders/terrain_vert.glsl",
+                                       "Engine/shaders/terrain_frag.glsl");
+  noiseTex_ = Textures::createNoise(256);
+  waterDetailTex_ = Textures::createWaterDetail(256);
+  renderer_.setPrograms(terrainShader_, shaderProgram_, skyShader_);
   // Models are drawn by the engine loop (before the transparent ocean), not the renderer
   renderer_.setScene(&terrain_, &sky_, nullptr);
 
   // Generate initial procedural terrain via Terrain subsystem
   terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_,
                               textureTile_, terrainParams_);
+  replantTrees();
   placePlayerOnLand();
 
   // Initialize GUI after the OpenGL context is created
@@ -242,93 +272,124 @@ bool Engine::load_flat_terrain(const std::string &texturePath) {
   }
   return true;
 }
+void Engine::setupSamplerUnits() {
+  // Texture units (fixed for the whole run): 0 surface/model texture, 2 height map, 3 sky cube,
+  // 4 terrain albedo array, 6 canopy shade, 7 leaf/bark cards, 8 noise, 9 water ripples,
+  // 10 sun shadow height map, 11/12 tree billboard atlases
+  auto set = [](GLuint p, const char *name, int unit) {
+    glUseProgram(p);
+    glUniform1i(glGetUniformLocation(p, name), unit);
+  };
+  for (GLuint p : {shaderProgram_, terrainShader_}) {
+    set(p, "texture1", 0);
+    set(p, "heightTex", 2);
+    set(p, "canopyShade", 6);
+  }
+  set(waterShader_, "heightTex", 2);
+  set(grassShader_, "heightTex", 2);
+  set(grassShader_, "matAlbedo", 4);
+  set(treeShader_, "foliageTex", 7);
+}
+
+void Engine::renderFrame(GLuint outputFbo, int outW, int outH) {
+  // Camera
+  camera_.setPosition(cameraPos_);
+  camera_.setYawPitch(yaw_, pitch_);
+  glm::mat4 view = camera_.getView();
+  glm::mat4 proj = camera_.getProj(underwater_ ? 70.0f : 60.0f, (float)outW / (float)std::max(outH, 1), 0.2f, 4000.0f);
+  glm::mat4 VP = proj * view;
+  glm::mat4 invProj = glm::inverse(proj);
+  glm::mat4 invView = glm::inverse(view);
+
+  gpuTimers_.newFrame();
+
+  // Light the scene to match the sky (sun direction/colour detected from HDR panoramas)
+  // or from the manual sun controls
+  sky_.sunOverride = !sunFromSky_;
+  if (!sunFromSky_) {
+    float el = glm::radians(sunElevation_), az = glm::radians(sunAzimuth_);
+    glm::vec3 toSun(std::cos(el) * std::cos(az), std::sin(el), std::cos(el) * std::sin(az));
+    // Low sun: warmer and dimmer light through more atmosphere
+    float low = 1.0f - glm::smoothstep(0.0f, 0.5f, toSun.y);
+    sky_.overrideLightDir = -toSun;
+    sky_.overrideLightColor = sunTint_ * sunIntensity_ * glm::mix(glm::vec3(1.0f), glm::vec3(1.0f, 0.62f, 0.38f), low * 0.8f) *
+                              (0.35f + 0.65f * glm::smoothstep(-0.05f, 0.25f, toSun.y));
+  }
+  glm::vec3 lightDir = sky_.lightDirection();
+  glm::vec3 lightCol = sky_.lightColor();
+  // Colour of the water seen from inside it (dimmer when the sun is weak)
+  const TerrainParams &TP = terrain_.params();
+  float sunLum = glm::clamp(glm::dot(lightCol, glm::vec3(0.3f, 0.6f, 0.1f)), 0.25f, 1.0f);
+  glm::vec3 uwColor = glm::mix(TP.waterDeep, TP.waterShallow, 0.45f) * (0.35f + 0.9f * sunLum);
+
+  // Sun shadows: rebuilt when the sun moves (at most 4x per second while it is being dragged)
+  double nowSec = glfwGetTime();
+  if (graphics_.shadows && sunShadow_.needsRebuild(-lightDir) && nowSec - lastShadowBuild_ > 0.25) {
+    gpuTimers_.begin("shadows");
+    sunShadow_.build(terrain_, foliage_.canopyHeightTexture(), -lightDir);
+    gpuTimers_.end();
+    lastShadowBuild_ = nowSec;
+  }
+  for (GLuint p : {shaderProgram_, terrainShader_, waterShader_, grassShader_, treeShader_, impostorShader_})
+    setPerFrameUniforms(p, lightDir, lightCol, uwColor);
+  glUseProgram(skyShader_);
+  glUniform1i(glGetUniformLocation(skyShader_, "underwater"), underwater_ ? 1 : 0);
+  glUniform3fv(glGetUniformLocation(skyShader_, "uwColor"), 1, &uwColor.x);
+  sky_.fogColor = terrainParams_.fogColor;
+  terrain_.setLodDistance(graphics_.terrainLodDistance);
+
+  // --- 3D scene into the (dynamic resolution) scene buffer ---
+  post_.beginScene(outW, outH, post_.scale());
+  glEnable(GL_DEPTH_TEST);
+  glDepthMask(GL_TRUE);
+  glClearColor(0.53f, 0.8f, 1.0f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  gpuTimers_.begin("terrain+sky");
+  renderer_.drawFrame(view, proj, glm::mat4(1.0f), invView, invProj, cameraPos_,
+                      sky_.hasCubemap(), swimTime_, cloudEnabled_, cloudSpeed_,
+                      cloudScale_, cloudOpacity_);
+  gpuTimers_.end();
+
+  gpuTimers_.begin("trees+grass");
+  foliage_.draw(terrain_, foliageParams_, view, proj, cameraPos_, swimTime_);
+  models_.drawAll(shaderProgram_, view, proj);
+  gpuTimers_.end();
+
+  // Ocean last: it is transparent and must blend over everything below it
+  gpuTimers_.begin("water");
+  terrain_.drawWater(waterShader_, view, proj, cameraPos_, swimTime_);
+  gpuTimers_.end();
+
+  // --- Post-processing and upscale to the output ---
+  gpuTimers_.begin("post");
+  post_.endScene(graphics_, outputFbo, VP, cameraPos_, -lightDir, lightCol, underwater_, swimTime_);
+  gpuTimers_.end();
+
+  // Dynamic resolution from the measured GPU time of the whole frame
+  post_.updateScale(graphics_, gpuTimers_.lastTotalMs());
+}
+
 void Engine::mainloop() {
-  // Safety check
   if (!window_)
     return;
+  setupSamplerUnits();
 
-  // Sampler units that never change (terrain shader): 0 = surface texture,
-  // 2 = height map (water), 3 = sky cubemap. Each sampler type needs its own unit.
-  glUseProgram(shaderProgram_);
-  glUniform1i(glGetUniformLocation(shaderProgram_, "texture1"), 0);
-  glUniform1i(glGetUniformLocation(shaderProgram_, "heightTex"), 2);
-  glUniform1i(glGetUniformLocation(shaderProgram_, "skyTex"), 3);
-  glUseProgram(waterShader_);
-  glUniform1i(glGetUniformLocation(waterShader_, "heightTex"), 2);
-  glUniform1i(glGetUniformLocation(waterShader_, "skyTex"), 3);
-
-  // Get initial window size
-  int SCR_W, SCR_H;
-  glfwGetWindowSize(window_, &SCR_W, &SCR_H);
-
-  // Main loop
   lastFrame_ = Clock::now();
   while (!glfwWindowShouldClose(window_)) {
-    // Timing
     auto now = Clock::now();
     deltaTime_ = std::chrono::duration<float>(now - lastFrame_).count();
     lastFrame_ = now;
     terrain_.setLiveParams(terrainParams_);
     updateMovement(deltaTime_);
 
-    // Camera
-    // Camera matrices
-    camera_.setPosition(cameraPos_);
-    camera_.setYawPitch(yaw_, pitch_);
-    glm::mat4 view = camera_.getView();
-    glm::mat4 proj =
-        camera_.getProj(underwater_ ? 70.0f : 60.0f, (float)SCR_W / (float)SCR_H, 0.2f, 4000.0f);
-    glm::mat4 model(1.0f);
-
-    // --- Clear first (important!) ---
-    glClearColor(0.53f, 0.8f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    glm::mat4 invProj = glm::inverse(proj);
-    glm::mat4 invView = glm::inverse(view);
-
-    // Use running time since program start for smoother animation
-    static double startTime =
-        std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
-    float runTime =
-        (float)(std::chrono::duration<double>(Clock::now().time_since_epoch())
-                    .count() -
-                startTime);
-
-    // Light the scene to match the sky (sun direction/colour detected from HDR panoramas)
-    glm::vec3 lightDir = glm::normalize(glm::vec3(-0.2f, -1.0f, -0.3f));
-    glm::vec3 lightCol(1.0f, 0.98f, 0.9f);
-    if (sunFromSky_) {
-      lightDir = sky_.lightDirection();
-      lightCol = sky_.lightColor();
+    // Render at the framebuffer size (differs from the window size on HiDPI screens)
+    int fbW, fbH;
+    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    if (fbW > 0 && fbH > 0) {
+      renderFrame(0, fbW, fbH);
+      gui_->render();
     }
-    // Colour of the water seen from inside it (dimmer when the sun is weak)
-    const TerrainParams &TP = terrain_.params();
-    float sunLum = glm::clamp(glm::dot(lightCol, glm::vec3(0.3f, 0.6f, 0.1f)), 0.25f, 1.0f);
-    glm::vec3 uwColor = glm::mix(TP.waterDeep, TP.waterShallow, 0.45f) * (0.35f + 0.9f * sunLum);
-    setPerFrameUniforms(shaderProgram_, lightDir, lightCol, uwColor);
-    setPerFrameUniforms(waterShader_, lightDir, lightCol, uwColor);
-    glUseProgram(skyShader_);
-    glUniform1i(glGetUniformLocation(skyShader_, "underwater"), underwater_ ? 1 : 0);
-    glUniform3fv(glGetUniformLocation(skyShader_, "uwColor"), 1, &uwColor.x);
-    sky_.fogColor = terrainParams_.fogColor;
-
-    // --- Then draw terrain via Renderer (which calls Terrain) ---
-    renderer_.drawFrame(view, proj, model, invView, invProj, cameraPos_,
-                        sky_.hasCubemap(), runTime, cloudEnabled_, cloudSpeed_,
-                        cloudScale_, cloudOpacity_);
-
-
-  // --- Draw models via Models manager ---
-    models_.drawAll(shaderProgram_, view, proj);
-
-    // --- Ocean last: it is transparent and must blend over everything below it ---
-    terrain_.drawWater(waterShader_, view, proj, cameraPos_, swimTime_);
-
-    // Render GUI
-  gui_->render();
-
-    // Swap buffers and poll events
     glfwSwapBuffers(window_);
     glfwPollEvents();
   }
@@ -358,6 +419,11 @@ void Engine::keyCallbackStatic(GLFWwindow *window, int key, int scancode,
 }
 
 void Engine::cursorPosCallback(double xpos, double ypos) {
+  // Free cursor (settings panel open / ENTER): the mouse drives the GUI, not the camera
+  if (glfwGetInputMode(window_, GLFW_CURSOR) != GLFW_CURSOR_DISABLED) {
+    firstMouse_ = true;
+    return;
+  }
   if (firstMouse_) {
     lastX_ = xpos;
     lastY_ = ypos;
@@ -374,9 +440,25 @@ void Engine::cursorPosCallback(double xpos, double ypos) {
   pitch_ = glm::clamp(pitch_, -89.0f, 89.0f);
 }
 
+void Engine::setGuiVisible(bool v) {
+  guiVisible_ = v;
+  glfwSetInputMode(window_, GLFW_CURSOR, v ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+  firstMouse_ = true; // no camera jump when the cursor is captured again
+}
+
 void Engine::keyCallback(int key, int, int action, int) {
+  // While typing into a GUI text field, keys belong to ImGui (releases always pass
+  // through so movement keys can't get stuck)
+  bool typing = guiVisible_ && ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
+  if (typing && action != GLFW_RELEASE)
+    return;
+
   if (key >= 0 && key < 1024)
     keys_[key] = (action == GLFW_PRESS || action == GLFW_REPEAT); // key states
+
+  // TAB shows / hides the settings panel (and frees the mouse to use it)
+  if (key == GLFW_KEY_TAB && action == GLFW_PRESS)
+    setGuiVisible(!guiVisible_);
 
   // ESC closes the window
   if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
@@ -390,12 +472,9 @@ void Engine::keyCallback(int key, int, int action, int) {
 
   // ENTER toggles mouse visibility
   if (key == GLFW_KEY_ENTER && action == GLFW_PRESS) {
-    static bool cursorVisible = false;
-    cursorVisible = !cursorVisible;
-    if (cursorVisible)
-      glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-    else
-      glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    bool captured = glfwGetInputMode(window_, GLFW_CURSOR) == GLFW_CURSOR_DISABLED;
+    glfwSetInputMode(window_, GLFW_CURSOR, captured ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+    firstMouse_ = true;
   }
 }
 
@@ -410,6 +489,26 @@ void Engine::setPerFrameUniforms(GLuint prog, const glm::vec3 &lightDir,
   glUniform3fv(glGetUniformLocation(prog, "uwColor"), 1, &uwColor.x);
   glUniform1f(glGetUniformLocation(prog, "time"), swimTime_);
   sky_.bindForLighting(prog, 3);
+  // Atmosphere (shared by every scene shader through common.glsl)
+  const TerrainParams &P = terrainParams_;
+  glUniform3fv(glGetUniformLocation(prog, "fogColor"), 1, &P.fogColor.x);
+  glUniform1f(glGetUniformLocation(prog, "fogDensity"), P.fogDensity);
+  glUniform1f(glGetUniformLocation(prog, "fogHeightDensity"), graphics_.fogHeightDensity);
+  glUniform1f(glGetUniformLocation(prog, "fogHeightFalloff"), graphics_.fogHeightFalloff);
+  glUniform1f(glGetUniformLocation(prog, "fogBaseY"), terrain_.getWaterY());
+  glUniform1f(glGetUniformLocation(prog, "sunGlow"), graphics_.sunGlow);
+  glUniform3fv(glGetUniformLocation(prog, "viewPos"), 1, &cameraPos_.x);
+  // Procedural helper textures: 8 noise, 9 water ripples
+  glUniform1i(glGetUniformLocation(prog, "noiseTex"), 8);
+  glUniform1i(glGetUniformLocation(prog, "waterDetail"), 9);
+  glActiveTexture(GL_TEXTURE8);
+  glBindTexture(GL_TEXTURE_2D, noiseTex_);
+  glActiveTexture(GL_TEXTURE9);
+  glBindTexture(GL_TEXTURE_2D, waterDetailTex_);
+  glActiveTexture(GL_TEXTURE0);
+  // Sun shadow height map on unit 10, canopy shade on unit 6
+  sunShadow_.bind(prog, 10, terrain_.getHalfExtent(), graphics_.shadowStrength, graphics_.shadows);
+  foliage_.bindCanopyShade(prog, 6, terrain_.getHalfExtent());
 }
 
 void Engine::updateMovement(float dt) {
@@ -448,6 +547,7 @@ void Engine::updateMovement(float dt) {
     float sp = moveSpeed_ * (keys_[GLFW_KEY_LEFT_SHIFT] ? SPRINT_MULTIPLIER : 1.0f) *
                (1.0f - 0.55f * wade);
     cameraPos_ += input(flatFront) * sp * dt;
+    foliage_.resolveCollision(cameraPos_);
     ground = terrain_.getHeightAt(cameraPos_.x, cameraPos_.z);
     surface = terrain_.getWaterSurfaceAt(cameraPos_.x, cameraPos_.z, swimTime_);
     depth = surface - ground;
@@ -495,6 +595,7 @@ void Engine::updateMovement(float dt) {
     vy += jumpVel_;
 
     cameraPos_ += glm::vec3(move.x, 0.0f, move.z) * dt;
+    foliage_.resolveCollision(cameraPos_);
     cameraPos_.y += vy * dt;
 
     ground = terrain_.getHeightAt(cameraPos_.x, cameraPos_.z);
@@ -526,7 +627,14 @@ void Engine::updateMovement(float dt) {
 void Engine::regenerateTerrain() {
   terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_,
                               textureTile_, terrainParams_);
+  replantTrees();
   placePlayerOnLand();
+}
+
+void Engine::replantTrees() {
+  foliage_.generate(terrain_, foliageParams_, terrainParams_.seed);
+  terrain_.buildMinimap(512, &foliage_.treeDots());
+  sunShadow_.invalidate(); // trees and terrain changed: shadows are rebuilt next frame
 }
 
 void Engine::placePlayerOnLand() {
@@ -558,6 +666,7 @@ void Engine::placePlayerOnLand() {
       pitch_ = -6.0f;
     }
   }
+  foliage_.resolveCollision(cameraPos_); // don't start inside a tree trunk
 }
 
 

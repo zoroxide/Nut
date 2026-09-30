@@ -20,9 +20,16 @@ Terrain::~Terrain() {
     if (flatVAO_) glDeleteVertexArrays(1, &flatVAO_);
     if (flatTex_) glDeleteTextures(1, &flatTex_);
     if (heightTex_) glDeleteTextures(1, &heightTex_);
+    for (auto& p : patches_) {
+        if (p.vbo) glDeleteBuffers(1, &p.vbo);
+        if (p.ebo) glDeleteBuffers(1, &p.ebo);
+        if (p.vao) glDeleteVertexArrays(1, &p.vao);
+    }
+    if (chunkInstVBO_) glDeleteBuffers(1, &chunkInstVBO_);
     if (waterVBO_) glDeleteBuffers(1, &waterVBO_);
     if (waterEBO_) glDeleteBuffers(1, &waterEBO_);
     if (matAlbedo_) glDeleteTextures(1, &matAlbedo_);
+    if (minimapTex_) glDeleteTextures(1, &minimapTex_);
     if (matNormal_) glDeleteTextures(1, &matNormal_);
     if (procTexture_) glDeleteTextures(1, &procTexture_);
     if (waterVAO_) glDeleteVertexArrays(1, &waterVAO_);
@@ -181,18 +188,139 @@ void Terrain::draw(GLuint shaderProgram, const glm::mat4& model, const glm::mat4
         glUniform3fv(U("sandTint"), 1, &P.sandTint.x);
         glUniform3fv(U("rockTint"), 1, &P.rockTint.x);
         glUniform3fv(U("snowTint"), 1, &P.snowTint.x);
-        glUniform3fv(U("fogColor"), 1, &P.fogColor.x);
-        glUniform1f(U("fogDensity"), P.fogDensity);
         glUniform3fv(U("waterShallow"), 1, &P.waterShallow.x);
         glUniform3fv(U("waterDeep"), 1, &P.waterDeep.x);
-        glUniformMatrix4fv(U("model"), 1, GL_FALSE, &model[0][0]);
-        glUniformMatrix4fv(U("mvp"), 1, GL_FALSE, &(proj * view * model)[0][0]);
-        glBindVertexArray(vao_);
-        glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
-        glUniform1i(U("shadeMode"), 0); // objects drawn afterwards use plain shading
+        drawChunks(shaderProgram, view, proj, cameraPos);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Chunked LOD terrain
+// ---------------------------------------------------------------------------
+void Terrain::buildPatches() {
+    for (int l = 0; l < kLods; ++l) {
+        const int step = 1 << l, cells = kChunkCells / step, n = cells + 1;
+        std::vector<float> v;   // local grid x, local grid z, skirt flag
+        std::vector<unsigned> idx;
+        for (int j = 0; j < n; ++j) for (int i = 0; i < n; ++i) v.insert(v.end(), { (float)(i * step), (float)(j * step), 0.0f });
+        for (int j = 0; j < cells; ++j) for (int i = 0; i < cells; ++i) {
+            unsigned a = j * n + i, b = a + 1, c = a + n, d = c + 1;
+            idx.insert(idx.end(), { a, c, d, a, d, b });
+        }
+        // Skirts: a strip hanging down from every edge hides cracks between neighbouring LODs
+        auto skirt = [&](int i0, int j0, int di, int dj) {
+            unsigned base = (unsigned)(v.size() / 3);
+            for (int k = 0; k < n; ++k) {
+                int i = i0 + di * k, j = j0 + dj * k;
+                v.insert(v.end(), { (float)(i * step), (float)(j * step), 1.0f });
+            }
+            for (int k = 0; k < cells; ++k) {
+                unsigned top0 = (j0 + dj * k) * n + (i0 + di * k), top1 = (j0 + dj * (k + 1)) * n + (i0 + di * (k + 1));
+                unsigned bot0 = base + k, bot1 = base + k + 1;
+                idx.insert(idx.end(), { top0, bot0, bot1, top0, bot1, top1 });
+            }
+        };
+        skirt(0, 0, 1, 0); skirt(0, cells, 1, 0); skirt(0, 0, 0, 1); skirt(cells, 0, 0, 1);
+        Patch& p = patches_[l];
+        glGenVertexArrays(1, &p.vao); glGenBuffers(1, &p.vbo); glGenBuffers(1, &p.ebo);
+        if (!chunkInstVBO_) glGenBuffers(1, &chunkInstVBO_);
+        glBindVertexArray(p.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, p.vbo);
+        glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, p.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(unsigned), idx.data(), GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, chunkInstVBO_);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0); glEnableVertexAttribArray(1);
+        glVertexAttribDivisor(1, 1);
+        glBindVertexArray(0);
+        p.count = (GLsizei)idx.size();
+    }
+}
+
+void Terrain::buildChunks() {
+    chunks_.clear();
+    const int N = size_;
+    for (int gz = 0; gz < N - 1; gz += kChunkCells)
+        for (int gx = 0; gx < N - 1; gx += kChunkCells) {
+            Chunk c{ gx, gz, 1e9f, -1e9f };
+            for (int z = gz; z <= std::min(gz + kChunkCells, N - 1); ++z)
+                for (int x = gx; x <= std::min(gx + kChunkCells, N - 1); ++x) {
+                    float h = heights_[z * N + x];
+                    c.minY = std::min(c.minY, h); c.maxY = std::max(c.maxY, h);
+                }
+            c.minY -= 12.0f; // room for skirts
+            chunks_.push_back(c);
+        }
+}
+
+void Terrain::drawChunks(GLuint prog, const glm::mat4& view, const glm::mat4& proj, const glm::vec3& cameraPos) {
+    glm::mat4 VP = proj * view;
+    glm::vec4 rows[4];
+    for (int i = 0; i < 4; ++i) rows[i] = glm::vec4(VP[0][i], VP[1][i], VP[2][i], VP[3][i]);
+    glm::vec4 planes[5] = { rows[3] + rows[0], rows[3] - rows[0], rows[3] + rows[1], rows[3] - rows[1], rows[3] + rows[2] };
+    const float half = getHalfExtent();
+    const float chunkWorld = kChunkCells * scale_;
+
+    struct Vis { float d; int lod; float gx, gz; };
+    static std::vector<Vis> vis;
+    vis.clear();
+    // Deep sea floor is hidden by the (opaque) deep ocean when the camera is above water
+    const float hiddenBelow = (params_.waterEnabled && cameraPos.y > waterY_ + 0.5f) ? waterY_ - 14.0f : -1e9f;
+    for (const Chunk& c : chunks_) {
+        if (c.maxY < hiddenBelow) continue;
+        glm::vec3 mn(c.gx * scale_ - half, c.minY, c.gz * scale_ - half);
+        glm::vec3 mx = mn + glm::vec3(chunkWorld, 0, chunkWorld);
+        mx.y = c.maxY;
+        bool inside = true;
+        for (auto& p : planes) {
+            glm::vec3 pv(p.x > 0 ? mx.x : mn.x, p.y > 0 ? mx.y : mn.y, p.z > 0 ? mx.z : mn.z);
+            if (glm::dot(glm::vec3(p), pv) + p.w < 0.0f) { inside = false; break; }
+        }
+        if (!inside) continue;
+        glm::vec3 closest = glm::clamp(cameraPos, mn, mx);
+        float d = glm::length(closest - cameraPos);
+        int lod = 0;
+        float threshold = lodDistance_;
+        while (lod < kLods - 1 && d > threshold) { ++lod; threshold *= 2.0f; }
+        vis.push_back({ d, lod, (float)c.gx, (float)c.gz });
+    }
+    // Front-to-back so hidden pixels are rejected by the depth test before shading
+    std::sort(vis.begin(), vis.end(), [](const Vis& a, const Vis& b) { return a.d < b.d; });
+    std::vector<float> inst;
+    int offsets[kLods + 1] = {};
+    for (int l = 0; l < kLods; ++l) {
+        offsets[l] = (int)(inst.size() / 2);
+        for (const Vis& v : vis) if (v.lod == l) { inst.push_back(v.gx); inst.push_back(v.gz); }
+    }
+    offsets[kLods] = (int)(inst.size() / 2);
+    if (inst.empty()) return;
+    glBindBuffer(GL_ARRAY_BUFFER, chunkInstVBO_);
+    glBufferData(GL_ARRAY_BUFFER, inst.size() * sizeof(float), inst.data(), GL_STREAM_DRAW);
+
+    auto U = [&](const char* n) { return glGetUniformLocation(prog, n); };
+    glUniformMatrix4fv(U("viewProj"), 1, GL_FALSE, &VP[0][0]);
+    glUniform1i(U("gridN"), size_);
+    glUniform1f(U("gridScale"), scale_);
+    glUniform1f(U("halfExtent"), half);
+    glUniform1i(U("heightTex"), 2);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, heightTex_);
+    glActiveTexture(GL_TEXTURE0);
+    drawnTriangles_ = 0;
+    for (int l = 0; l < kLods; ++l) {
+        int n = offsets[l + 1] - offsets[l];
+        if (!n) continue;
+        glUniform1f(U("skirtDepth"), (1 << l) * scale_ * 2.0f + 1.0f);
+        glBindVertexArray(patches_[l].vao);
+        glBindBuffer(GL_ARRAY_BUFFER, chunkInstVBO_);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)(offsets[l] * 2 * sizeof(float)));
+        glDrawElementsInstanced(GL_TRIANGLES, patches_[l].count, GL_UNSIGNED_INT, 0, n);
+        drawnTriangles_ += patches_[l].count / 3 * n;
+    }
+    glBindVertexArray(0);
+}
+
 
 // Wave set shared with water_vert.glsl (keep both in sync): direction offset from the
 // wind (radians), wavelength and amplitude relative to the main swell.
@@ -223,8 +351,8 @@ float Terrain::getWaterSurfaceAt(float wx, float wz, float t) const {
 
 // Camera-centred grid: dense near the middle, stretching to the horizon at the edges
 void Terrain::buildWaterGrid() {
-    const int N = 384;               // cells per side
-    const float inner = 48.0f;       // ~0.25 m spacing at the centre
+    const int N = 256;               // cells per side
+    const float inner = 40.0f;       // ~0.3 m spacing at the centre
     const float R = 6000.0f;         // reaches far past the island
     auto warp = [&](float u) { float a = std::fabs(u); return (u < 0 ? -1.0f : 1.0f) * (inner * a + (R - inner) * a * a * a); };
     std::vector<float> v; v.reserve((size_t)(N + 1) * (N + 1) * 3);
@@ -287,44 +415,161 @@ void Terrain::drawWater(GLuint prog, const glm::mat4& view, const glm::mat4& pro
     glDisable(GL_BLEND);
 }
 
+void Terrain::buildMinimap(int res, const std::vector<glm::vec3>* trees) {
+    if (heights_.empty()) return;
+    const int N = size_;
+    const TerrainParams& P = params_;
+    auto H = [&](int x, int z) { return heights_[glm::clamp(z, 0, N - 1) * N + glm::clamp(x, 0, N - 1)]; };
+    const glm::vec3 sun = glm::normalize(glm::vec3(-1.0f, 1.3f, -1.0f)); // light from the north-west
+    const float beach = P.beachWidth * heightScale_ + 0.4f;
+    const float snow = P.snowLine * heightScale_;
+    std::vector<unsigned char> img((size_t)res * res * 4);
+    for (int y = 0; y < res; ++y) for (int x = 0; x < res; ++x) {
+        int hx = x * (N - 1) / (res - 1), hz = y * (N - 1) / (res - 1);
+        float h = H(hx, hz);
+        int s = std::max(1, N / res);
+        float dx = (H(hx + s, hz) - H(hx - s, hz)) / (2.0f * s * scale_);
+        float dz = (H(hx, hz + s) - H(hx, hz - s)) / (2.0f * s * scale_);
+        glm::vec3 n = glm::normalize(glm::vec3(-dx, 1.0f, -dz));
+        glm::vec3 c;
+        float depth = waterY_ - h;
+        if (P.waterEnabled && depth > 0.0f) {
+            // Ocean: light turquoise shallows fading to deep blue, with a soft relief of the sea floor
+            float t = glm::smoothstep(0.0f, 14.0f, depth);
+            c = glm::mix(glm::vec3(0.42f, 0.80f, 0.82f), glm::vec3(0.06f, 0.20f, 0.42f), t);
+            c *= 0.9f + 0.15f * glm::dot(n, sun);
+            if (depth < 0.5f) c = glm::mix(c, glm::vec3(0.92f, 0.96f, 0.96f), 0.6f); // surf line
+        } else {
+            float above = h - waterY_;
+            float slope = 1.0f - n.y;
+            glm::vec3 grassLow(0.40f, 0.58f, 0.24f), grassHigh(0.30f, 0.44f, 0.20f);
+            c = glm::mix(grassLow, grassHigh, glm::clamp(above / (heightScale_ * 0.6f), 0.0f, 1.0f));
+            if (P.waterEnabled && above < beach) c = glm::vec3(0.86f, 0.78f, 0.56f);
+            c = glm::mix(c, glm::vec3(0.52f, 0.47f, 0.42f), glm::smoothstep(P.rockSlope, P.rockSlope + 0.12f, slope));
+            c = glm::mix(c, glm::vec3(0.95f, 0.96f, 0.98f),
+                         glm::smoothstep(snow, snow + 2.0f, h) * (1.0f - glm::smoothstep(0.35f, 0.7f, slope)));
+            // Hill shading makes ridges and valleys readable at a glance
+            c *= 0.45f + 0.75f * glm::clamp(glm::dot(n, sun), 0.0f, 1.0f);
+        }
+        unsigned char* p = &img[((size_t)y * res + x) * 4];
+        p[0] = (unsigned char)(glm::clamp(c.r, 0.0f, 1.0f) * 255.0f);
+        p[1] = (unsigned char)(glm::clamp(c.g, 0.0f, 1.0f) * 255.0f);
+        p[2] = (unsigned char)(glm::clamp(c.b, 0.0f, 1.0f) * 255.0f);
+        p[3] = 255;
+    }
+    // Trees: small dark-green crowns with a lit top-left edge
+    if (trees) {
+        float half = getHalfExtent();
+        for (const glm::vec3& t : *trees) {
+            float cx = (t.x / (2 * half) + 0.5f) * (res - 1), cz = (t.y / (2 * half) + 0.5f) * (res - 1);
+            float r = std::max(0.9f, t.z / (2 * half) * res);
+            for (int y = (int)(cz - r - 1); y <= (int)(cz + r + 1); ++y)
+                for (int x = (int)(cx - r - 1); x <= (int)(cx + r + 1); ++x) {
+                    if (x < 0 || y < 0 || x >= res || y >= res) continue;
+                    float d = std::sqrt((x - cx) * (x - cx) + (y - cz) * (y - cz)) / r;
+                    if (d > 1.0f) continue;
+                    float lit = glm::clamp(0.75f - ((x - cx) + (y - cz)) / r * 0.25f, 0.4f, 1.0f);
+                    unsigned char* p = &img[((size_t)y * res + x) * 4];
+                    float a = 0.85f * (1.0f - d * d * 0.5f);
+                    p[0] = (unsigned char)(p[0] * (1 - a) + 38 * lit * a);
+                    p[1] = (unsigned char)(p[1] * (1 - a) + 78 * lit * a);
+                    p[2] = (unsigned char)(p[2] * (1 - a) + 34 * lit * a);
+                }
+        }
+    }
+    if (!minimapTex_) glGenTextures(1, &minimapTex_);
+    glBindTexture(GL_TEXTURE_2D, minimapTex_);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, res, res, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+// Upload a texture array with a CPU-built mip chain. When `compressed` is supported the driver
+// compresses on upload (4-8x less memory bandwidth, which is what limits integrated GPUs).
+static void uploadArray(GLuint tex, std::vector<std::vector<unsigned char>>& layers, int W, int H, int C,
+                        GLenum compressed, GLenum plain, GLenum srcFormat, float aniso) {
+    glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    int levels = 1 + (int)std::floor(std::log2((float)std::max(W, H)));
+    GLenum internal = compressed ? compressed : plain;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        while (glGetError() != GL_NO_ERROR) {}
+        std::vector<std::vector<unsigned char>> cur = layers;
+        int w = W, h = H;
+        for (int l = 0; l < levels; ++l) {
+            glTexImage3D(GL_TEXTURE_2D_ARRAY, l, internal, w, h, (GLsizei)layers.size(), 0, srcFormat, GL_UNSIGNED_BYTE, nullptr);
+            for (size_t i = 0; i < cur.size(); ++i)
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, l, 0, 0, (GLint)i, w, h, 1, srcFormat, GL_UNSIGNED_BYTE, cur[i].data());
+            if (w == 1 && h == 1) { levels = l + 1; break; }
+            int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+            for (auto& img : cur) {   // 2x2 box filter
+                std::vector<unsigned char> next((size_t)nw * nh * C);
+                for (int y = 0; y < nh; ++y) for (int x = 0; x < nw; ++x) for (int c = 0; c < C; ++c) {
+                    int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1), y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
+                    int sum = img[((size_t)y0 * w + x0) * C + c] + img[((size_t)y0 * w + x1) * C + c]
+                            + img[((size_t)y1 * w + x0) * C + c] + img[((size_t)y1 * w + x1) * C + c];
+                    next[((size_t)y * nw + x) * C + c] = (unsigned char)((sum + 2) / 4);
+                }
+                img.swap(next);
+            }
+            w = nw; h = nh;
+        }
+        if (glGetError() == GL_NO_ERROR || internal == plain) break;
+        std::cerr << "Terrain: texture compression unavailable, using uncompressed textures\n";
+        internal = plain;   // retry without compression
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, levels - 1);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    GLfloat maxAniso = 0.0f;
+    glGetFloatv(0x84FF /*GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT*/, &maxAniso);
+    if (maxAniso > 1.0f) glTexParameterf(GL_TEXTURE_2D_ARRAY, 0x84FE, glm::min(aniso, maxAniso));
+}
+
 bool Terrain::loadMaterials(const std::string& dir) {
     static const char* names[5] = { "grass", "grass2", "rock", "sand", "snow" };
-    auto loadArray = [&](const char* suffix, GLuint& tex) -> bool {
-        std::vector<unsigned char*> imgs(5, nullptr);
-        int W = 0, H = 0; bool ok = true;
+    // Albedo: RGB (DXT1 compressed). Normals: only X/Y are stored (RGTC2); the shader rebuilds Z.
+    auto loadArray = [&](const char* suffix, GLuint& tex, bool normals) -> bool {
+        std::vector<std::vector<unsigned char>> layers;
+        int W = 0, H = 0;
         stbi_set_flip_vertically_on_load(false);
-        for (int i = 0; i < 5 && ok; ++i) {
+        for (int i = 0; i < 5; ++i) {
             int w = 0, h = 0, c = 0;
+            unsigned char* img = nullptr;
             for (const char* ext : { ".jpg", ".png" }) {
                 std::string path = dir + "/" + names[i] + suffix + ext;
-                imgs[i] = stbi_load(path.c_str(), &w, &h, &c, 3);
-                if (imgs[i]) break;
+                img = stbi_load(path.c_str(), &w, &h, &c, 3);
+                if (img) break;
             }
-            if (!imgs[i] || (i > 0 && (w != W || h != H))) ok = false;
+            if (!img || (i > 0 && (w != W || h != H))) { if (img) stbi_image_free(img); return false; }
             W = w; H = h;
+            if (normals) {
+                std::vector<unsigned char> rg((size_t)w * h * 2);
+                for (size_t p = 0; p < (size_t)w * h; ++p) { rg[p * 2] = img[p * 3]; rg[p * 2 + 1] = img[p * 3 + 1]; }
+                layers.push_back(std::move(rg));
+            } else {
+                layers.emplace_back(img, img + (size_t)w * h * 3);
+            }
+            stbi_image_free(img);
         }
-        if (ok) {
-            if (tex) glDeleteTextures(1, &tex);
-            glGenTextures(1, &tex);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, W, H, 5, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-            for (int i = 0; i < 5; ++i)
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, W, H, 1, GL_RGB, GL_UNSIGNED_BYTE, imgs[i]);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-            glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            GLfloat maxAniso = 0.0f;
-            glGetFloatv(0x84FF /*GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT*/, &maxAniso);
-            if (maxAniso > 1.0f) glTexParameterf(GL_TEXTURE_2D_ARRAY, 0x84FE, glm::min(8.0f, maxAniso));
-        }
-        for (auto* p : imgs) if (p) stbi_image_free(p);
-        return ok;
+        if (tex) glDeleteTextures(1, &tex);
+        glGenTextures(1, &tex);
+        if (normals)
+            uploadArray(tex, layers, W, H, 2, GL_COMPRESSED_RG_RGTC2, GL_RG8, GL_RG, 2.0f);
+        else
+            uploadArray(tex, layers, W, H, 3, GLEW_EXT_texture_compression_s3tc ? GL_COMPRESSED_RGB_S3TC_DXT1_EXT : 0,
+                        GL_RGB8, GL_RGB, 4.0f);
+        return true;
     };
-    bool ok = loadArray("_albedo", matAlbedo_) && loadArray("_normal", matNormal_);
+    bool ok = loadArray("_albedo", matAlbedo_, false) && loadArray("_normal", matNormal_, true);
     if (!ok) {
         std::cerr << "Terrain: could not load materials from " << dir << " (using flat colours)\n";
         if (matAlbedo_) { glDeleteTextures(1, &matAlbedo_); matAlbedo_ = 0; }
@@ -554,8 +799,6 @@ void Terrain::generateProcedural(int size, float scale, float heightScale, float
     size_ = std::max(size, 4); scale_ = scale; heightScale_ = heightScale; tile_ = textureTile; params_ = params;
     const int N = size_;
     const TerrainParams& P = params_;
-    float half = (N - 1) * 0.5f * scale_;
-
     // 1. Raw noise (multithreaded), normalized to 0..1 so the settings behave the same at any seed
     HeightGen gen(P);
     std::vector<float> h(N * N);
@@ -611,23 +854,13 @@ void Terrain::generateProcedural(int size, float scale, float heightScale, float
     for (int i = 0; i < N * N; ++i) heights_[i] = h[i] * heightScale_;
     waterY_ = P.waterLevel * heightScale_;
 
-    auto H = [&](int x, int z) { return heights_[glm::clamp(z, 0, N - 1) * N + glm::clamp(x, 0, N - 1)]; };
-
-    // 5. Mesh with smooth normals from central differences
-    std::vector<float> inter; inter.reserve((size_t)N * N * 8);
-    for (int z = 0; z < N; ++z) for (int x = 0; x < N; ++x) {
-        float dhdx = (H(x + 1, z) - H(x - 1, z)) / (2.0f * scale_);
-        float dhdz = (H(x, z + 1) - H(x, z - 1)) / (2.0f * scale_);
-        glm::vec3 n = glm::normalize(glm::vec3(-dhdx, 1.0f, -dhdz));
-        inter.insert(inter.end(), { x * scale_ - half, H(x, z), z * scale_ - half, n.x, n.y, n.z,
-                                    (float)x / (N - 1) * tile_, (float)z / (N - 1) * tile_ });
-    }
-    std::vector<unsigned int> idx; idx.reserve((size_t)(N - 1) * (N - 1) * 6);
-    for (int z = 0; z < N - 1; ++z) for (int x = 0; x < N - 1; ++x) {
-        unsigned tl = z * N + x, tr = tl + 1, bl = (z + 1) * N + x, br = bl + 1;
-        idx.insert(idx.end(), { tl, bl, br, tl, br, tr });
-    }
-    buildProcedural(inter, idx);
+    // 5. Chunked LOD mesh: only per-chunk bounds are needed (geometry is shared patches)
+    isFlat_ = false;
+    if (flatVAO_) { glDeleteVertexArrays(1, &flatVAO_); flatVAO_ = 0; }
+    if (flatVBO_) { glDeleteBuffers(1, &flatVBO_); flatVBO_ = 0; }
+    if (flatEBO_) { glDeleteBuffers(1, &flatEBO_); flatEBO_ = 0; }
+    if (!patches_[0].vao) buildPatches();
+    buildChunks();
 
     // 6. Height texture (used by the water shader for depth / shoreline foam)
     if (!heightTex_) glGenTextures(1, &heightTex_);
@@ -639,6 +872,8 @@ void Terrain::generateProcedural(int size, float scale, float heightScale, float
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    // 7. Minimap for the HUD
+    buildMinimap(512);
 }
 
 float Terrain::getHeightAt(float wx, float wz) const {

@@ -34,7 +34,6 @@ public:
     Entity create() { return next_++; }
     void destroy(Entity e);
 
-    // Component maps
     std::unordered_map<Entity, Transform> transforms;
     std::unordered_map<Entity, CameraComponent> cameras;
     std::unordered_map<Entity, RenderMesh> meshes;

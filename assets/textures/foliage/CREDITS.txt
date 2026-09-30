@@ -1,0 +1,5 @@
+Foliage cards baked from Poly Haven textures (CC0, https://polyhaven.com):
+ conifer_branch.png   <- fir_tree_01 twig diffuse + alpha
+ broadleaf_cluster.png <- island_tree_02 leaves diffuse + alpha
+ acacia_cluster.png   <- jacaranda_tree leaves
+ bark.jpg             <- island_tree_02 branches diffuse

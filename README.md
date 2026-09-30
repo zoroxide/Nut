@@ -1,7 +1,13 @@
 # **Nut**
 
-Simple and beautifull 3D Fixed Terrain Generation (Perlin Noise) based game
-Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image for image handling 
+A beautifull 3D Fixed Terrain Generation (Perlin Noise) based game
+Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image for image handling and others..
+
+### shameless promotion...
+this software was never be produced without these resources:
+ - [learnopengl.com](https://learnopengl.com/)
+ - [OGLDEV](https://www.youtube.com/@OGLDEV)
+ - CS633 / CS352 Computer Graphics & linear algebra college courses
 
 # Screenshots
 ### using HDR panorama
@@ -30,8 +36,13 @@ int main() {
         return -1;
     }
 
+    // Ground materials (grass/rock/sand/snow) load automatically from assets/textures/terrain.
+    // To force your own grass texture instead:
+    // engine.load_terrain_using_texture("assets/textures/grass.png");
+
     // Load panorama (optional). HDR panoramas also drive the sun direction, colour and fog.
-    if (!engine.panorama("assets/panoramas/kloofendal_48d_partly_cloudy_puresky_4k.hdr")) {
+    if (!engine.panorama("assets/panoramas/kloofendal_48d_partly_cloudy_puresky_4k.hdr") &&
+        !engine.panorama("assets/skybox/sky_17_2k.png")) {
         std::cerr << "Failed to load panorama texture\n";
     }
 
@@ -44,6 +55,7 @@ int main() {
     return 0;
 }
 
+
 ```
 
 # Controls
@@ -51,18 +63,28 @@ int main() {
 - **SPACE_BAR** for jumping (swim up while in the water)
 - **C** or **Ctrl** to dive while swimming (or look down and press **W**)
 - **Mouse** cursor for Looking
-- **Enter** for Free mouse to use GUI Controlls
+- **Tab** to show / hide the settings panel (frees the mouse while it is open)
+- **M** to switch the minimap (bottom-left) between small and large
+- **Enter** to free / capture the mouse
 
 # World
 - A procedurally generated island (hills, mountains, beaches, no lakes) surrounded by an ocean
 - Ocean with Gerstner waves: walk into the sea to swim, dive to explore the sea floor,
   and keep an eye on your oxygen
-- Terrain presets, island shape, waves, materials, sky and fog are all tweakable in the GUI
+- Swaying forests (fir, broadleaf and acacia trees) and wind-blown grass that parts as you walk through it
+- Sun shadows from the terrain and trees, valley fog, sun glow in the haze, bloom and sun rays
+- Terrain presets, island shape, waves, materials, vegetation, sky, fog and graphics quality are all tweakable in the GUI
+
+# Performance
+Built to hold 60 FPS on integrated graphics (tested on Intel HD 620, 1920x1080):
+chunked terrain LOD, compressed textures, billboard trees in the distance, and an adaptive render
+resolution (Tab -> Graphics & Performance: quality preset, target FPS, per-pass GPU timings).
 
 # Assets
-HDRI skies (`assets/panoramas`) and terrain materials (`assets/textures/terrain`) are CC0 from [Poly Haven](https://polyhaven.com).
+HDRI skies (`assets/panoramas`), terrain materials (`assets/textures/terrain`) and the bark / leaf textures
+the tree cards are baked from (`assets/textures/foliage`) are CC0 from [Poly Haven](https://polyhaven.com).
   
-# Installing Requirements:
+# Installing Requirements (only linux for now, never tested on Windows or Mac) :
 
 ### Install Libs
 ```

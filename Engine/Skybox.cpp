@@ -44,6 +44,7 @@ glm::mat3 Skybox::rotation() const {
 }
 
 glm::vec3 Skybox::lightDirection() const {
+    if (sunOverride) return glm::normalize(overrideLightDir);
     if (!cubemap_ || !isHDR_) return glm::normalize(glm::vec3(-0.2f, -1.0f, -0.3f));
     // rotation() maps world -> panorama, so its transpose maps panorama -> world
     glm::vec3 sunWorld = glm::transpose(rotation()) * analysis_.sunDir;
@@ -53,6 +54,7 @@ glm::vec3 Skybox::lightDirection() const {
 }
 
 glm::vec3 Skybox::lightColor() const {
+    if (sunOverride) return overrideLightColor;
     if (!cubemap_ || !isHDR_) return glm::vec3(1.0f, 0.98f, 0.9f);
     return analysis_.sunColor * analysis_.sunIntensity;
 }
@@ -75,7 +77,8 @@ void Skybox::bindForLighting(GLuint prog, int unit) const {
 
 void Skybox::draw(const glm::mat4& invView, const glm::mat4& invProj, bool hasSkybox, float time, bool cloudEnabled, float cloudSpeed, float cloudScale, float cloudOpacity) {
     auto U = [&](const char* n) { return glGetUniformLocation(skyShader_, n); };
-    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     glDepthMask(GL_FALSE);
     glUseProgram(skyShader_);
     glUniformMatrix4fv(U("invProj"), 1, GL_FALSE, glm::value_ptr(invProj));
@@ -104,7 +107,7 @@ void Skybox::draw(const glm::mat4& invView, const glm::mat4& invProj, bool hasSk
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindVertexArray(0);
     glDepthMask(GL_TRUE);
-    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
 }
 
 // ---------------------------------------------------------------------------
