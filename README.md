@@ -1,4 +1,4 @@
-# **Nut**
+# **Procedural Terrain Generator Based Game using Moden OpenGL**
 A beautifull 3D Fixed Terrain Generation (Perlin Noise) based game (graphics engine with movement controls)
 Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image for image handling and others..
 
