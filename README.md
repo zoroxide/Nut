@@ -1,24 +1,26 @@
 # **Nut**
-
-A beautifull 3D Fixed Terrain Generation (Perlin Noise) based game
+A beautifull 3D Fixed Terrain Generation (Perlin Noise) based game (graphics engine with movement controls)
 Created using Modern OpenGL (GLFW, GLEW, GLM), modern C++ and finally stb_image for image handling and others..
 
-### shameless promotion...
-this software was never be produced without these resources:
+### Thanks to:
+**this software was never be produced without these resources:**
  - [learnopengl.com](https://learnopengl.com/)
  - [OGLDEV](https://www.youtube.com/@OGLDEV)
  - CS633 / CS352 Computer Graphics & linear algebra college courses
 
 # Screenshots
 ### using HDR panorama
+old version:
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f3ffdeab-faa8-443a-b2bd-3d36c32b81de" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/242c0160-3348-43c3-896a-9da0c6687416" />
 <img width="1366" height="768" alt="Screenshot From 2026-09-13 04-54-36" src="https://github.com/user-attachments/assets/08c704ee-2f23-49a2-ac3d-a3ad25abd3ef" />
-
-
-### with GUI (Dear Imgui)
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/d0fcbf73-9daa-42e4-8045-116761a2fe4d" />
 <img width="1927" height="1080" alt="image" src="https://github.com/user-attachments/assets/50be3578-bbae-4739-96e2-42976e7c3efa" />
+new verion:
+<img width="1920" height="1080" alt="Screenshot From 2026-09-30 11-52-11" src="https://github.com/user-attachments/assets/6d710708-2c6d-4d0d-bae0-645753addcd3" />
+<img width="1920" height="1080" alt="Screenshot From 2026-09-30 11-54-03" src="https://github.com/user-attachments/assets/df1cdf76-f1b2-4c4d-9ac5-2cea998f0848" />
+<img width="1920" height="1080" alt="Screenshot From 2026-09-30 10-48-17" src="https://github.com/user-attachments/assets/8c3fd254-9e4b-44ee-a6c3-abd552941da7" />
+<img width="1920" height="1080" alt="Screenshot From 2026-09-30 10-48-17" src="https://github.com/user-attachments/assets/2b65a5e0-7afc-44a3-a8e1-219215fb2c5b" />
 
 # Demo Code
 use you own textures and Panoramas (png and HDR)
@@ -78,11 +80,11 @@ int main() {
 # Performance
 Built to hold 60 FPS on integrated graphics (tested on Intel HD 620, 1920x1080):
 chunked terrain LOD, compressed textures, billboard trees in the distance, and an adaptive render
-resolution (Tab -> Graphics & Performance: quality preset, target FPS, per-pass GPU timings).
+resolution (Tab -> Graphics & Performance: quality preset, target FPS, per-pass GPU timings)
 
 # Assets
 HDRI skies (`assets/panoramas`), terrain materials (`assets/textures/terrain`) and the bark / leaf textures
-the tree cards are baked from (`assets/textures/foliage`) are CC0 from [Poly Haven](https://polyhaven.com).
+the tree cards are baked from (`assets/textures/foliage`) are CC0 from [Poly Haven](https://polyhaven.com)
   
 # Installing Requirements (only linux for now, never tested on Windows or Mac) :
 
