@@ -107,18 +107,72 @@ resolution (Tab -> Graphics & Performance: quality preset, target FPS, per-pass 
 HDRI skies (`assets/panoramas`), terrain materials (`assets/textures/terrain`) and the bark / leaf textures
 the tree cards are baked from (`assets/textures/foliage`) are CC0 from [Poly Haven](https://polyhaven.com)
   
-# Installing Requirements (only linux for now, never tested on Windows or Mac) :
+# Build and installation
 
-### Install Libs
+Run all build commands from the repository root. The executable loads assets using
+relative paths, so it should also be run from there.
+
+## Windows (MSYS2 UCRT64)
+
+Install [MSYS2](https://www.msys2.org/) and open the **UCRT64** shell. Do not mix
+libraries from the MINGW64 and UCRT64 environments.
+
+Update MSYS2, then install the compiler, Make, and graphics dependencies:
+
+```sh
+pacman -Syu
+pacman -S --needed base-devel \
+  mingw-w64-ucrt-x86_64-gcc \
+  mingw-w64-ucrt-x86_64-glfw \
+  mingw-w64-ucrt-x86_64-glew \
+  mingw-w64-ucrt-x86_64-glm \
+  mingw-w64-ucrt-x86_64-assimp
 ```
+
+Build and run:
+
+```sh
+make win
+make run
+```
+
+`make windows` is an alias for `make win`. The Windows executable is written to
+`build/windows/program.exe`.
+
+You may also invoke Make from PowerShell, provided `C:\msys64\ucrt64\bin` is on
+`PATH`. `make run` prioritizes this directory so that it loads the matching UCRT64
+DLLs. If MSYS2 is installed elsewhere, pass its runtime directory explicitly:
+
+```powershell
+make UCRT64_BIN=D:/path/to/msys64/ucrt64/bin run
+```
+
+## Linux (Debian/Ubuntu)
+
+Install the build tools and dependencies:
+
+```sh
 sudo apt update
-sudo apt install -y build-essential g++ cmake pkg-config git make cmake
-sudo apt install -y libglfw3-dev libglew-dev libglm-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev libassimp-dev
-
+sudo apt install -y build-essential make pkg-config \
+  libglfw3-dev libglew-dev libglm-dev \
+  libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+  libgl1-mesa-dev libassimp-dev
 ```
 
-### compile and run: 
+Build and run:
+
+```sh
+make linux
+make run
 ```
-sudo make run
+
+The Linux executable is written to `build/linux/program`.
+
+## Clean build files
+
+On either platform, remove all generated build output with:
+
+```sh
+make clean
 ```
 
