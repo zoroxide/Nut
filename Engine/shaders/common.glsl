@@ -30,6 +30,13 @@ uniform int hasSunShadow;
 uniform float shadowHalf;         // half size of the area it covers (world units)
 uniform float shadowStrength;
 
+// Local geometry shadows: roofs, wall openings and furniture cannot be represented
+// by the island's height-field shadow map. Unit 13 holds their directional depth map.
+uniform sampler2DShadow villageShadowTex;
+uniform mat4 villageLightViewProj;
+uniform int hasVillageShadow;
+uniform float villageShadowStrength;
+
 uniform sampler2D noiseTex;       // tileable noise, 4 octaves in r,g,b,a
 
 vec3 aces(vec3 x) {
@@ -56,13 +63,31 @@ vec4 noise4(vec2 p) { return texture(noiseTex, p); }
 
 // Sun visibility (1 lit, 0 in shadow) for a world-space point, with a soft penumbra that grows
 // with the height of the blocker above the point
-float sunShadow(vec3 p) {
+float terrainSunShadow(vec3 p) {
     if (hasSunShadow == 0) return 1.0;
     vec2 uv = p.xz / (2.0 * shadowHalf) + 0.5;
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
     float need = texture(sunShadowTex, uv).r;
     float s = smoothstep(need - 0.3, need + 1.2 + 0.08 * max(need - p.y, 0.0), p.y);
     return mix(1.0, s, shadowStrength);
+}
+
+float villageSunShadow(vec3 p) {
+    if (hasVillageShadow == 0) return 1.0;
+    vec3 q = (villageLightViewProj * vec4(p, 1.0)).xyz * 0.5 + 0.5;
+    if (any(lessThanEqual(q, vec3(0.0))) || any(greaterThanEqual(q, vec3(1.0)))) return 1.0;
+    vec2 texel = 1.0 / vec2(textureSize(villageShadowTex, 0));
+    // Small receiver bias plus hardware-filtered 3x3 PCF: stable soft edges,
+    // including thin frames and furniture, without detaching wall shadows.
+    float visibility = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+            visibility += texture(villageShadowTex, vec3(q.xy + vec2(x, y) * texel, q.z - 0.00018));
+    return mix(1.0, visibility / 9.0, villageShadowStrength);
+}
+
+float sunShadow(vec3 p) {
+    return min(terrainSunShadow(p), villageSunShadow(p));
 }
 
 vec3 fogBaseColor(vec3 rd) {

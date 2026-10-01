@@ -55,6 +55,7 @@ Engine::Engine()
 
 Engine::~Engine() {
   // Cleanup
+  village_.clear();
   if (shaderProgram_)
     glDeleteProgram(shaderProgram_);
   if (skyShader_)
@@ -165,6 +166,10 @@ bool Engine::init(bool fullscreen) {
   // Renderer programs and scene wiring
   terrainShader_ = shaders_.loadProgram("terrainLod", "Engine/shaders/terrain_vert.glsl",
                                        "Engine/shaders/terrain_frag.glsl");
+  villageShader_ = shaders_.loadProgram("village", "Engine/shaders/village_vert.glsl",
+                                      "Engine/shaders/village_frag.glsl");
+  villageShadowShader_ = shaders_.loadProgram("villageShadow", "Engine/shaders/village_shadow_vert.glsl",
+                                            "Engine/shaders/village_shadow_frag.glsl");
   noiseTex_ = Textures::createNoise(256);
   waterDetailTex_ = Textures::createWaterDetail(256);
   renderer_.setPrograms(terrainShader_, shaderProgram_, skyShader_);
@@ -174,12 +179,15 @@ bool Engine::init(bool fullscreen) {
   // Generate initial procedural terrain via Terrain subsystem
   terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_,
                               textureTile_, terrainParams_);
+  village_.generate(terrain_);
   replantTrees();
   placePlayerOnLand();
 
   // Initialize GUI after the OpenGL context is created
   if (gui_)
     gui_->init(window_);
+
+  setupSamplerUnits();
 
   return true;
 }
@@ -251,6 +259,8 @@ bool Engine::load_flat_terrain(const std::string &texturePath) {
   hasFlat_ = terrain_.buildFlat(texturePath);
   if (!hasFlat_)
     return false;
+  village_.clear();
+  foliage_.setClearing(glm::vec3(0));
   terrain_.setFlatScale(glm::vec3(terrainSize_ * terrainScale_ * 0.5f, 1.0f,
                                   terrainSize_ * terrainScale_ * 0.5f));
 
@@ -324,13 +334,15 @@ void Engine::renderFrame(GLuint outputFbo, int outW, int outH) {
 
   // Sun shadows: rebuilt when the sun moves (at most 4x per second while it is being dragged)
   double nowSec = glfwGetTime();
+  if (graphics_.shadows)
+    village_.buildShadow(villageShadowShader_, -lightDir);
   if (graphics_.shadows && sunShadow_.needsRebuild(-lightDir) && nowSec - lastShadowBuild_ > 0.25) {
     gpuTimers_.begin("shadows");
     sunShadow_.build(terrain_, foliage_.canopyHeightTexture(), -lightDir);
     gpuTimers_.end();
     lastShadowBuild_ = nowSec;
   }
-  for (GLuint p : {shaderProgram_, terrainShader_, waterShader_, grassShader_, treeShader_, impostorShader_})
+  for (GLuint p : {shaderProgram_, terrainShader_, waterShader_, grassShader_, treeShader_, impostorShader_, villageShader_})
     setPerFrameUniforms(p, lightDir, lightCol, uwColor);
   glUseProgram(skyShader_);
   glUniform1i(glGetUniformLocation(skyShader_, "underwater"), underwater_ ? 1 : 0);
@@ -354,6 +366,7 @@ void Engine::renderFrame(GLuint outputFbo, int outW, int outH) {
   gpuTimers_.begin("trees+grass");
   foliage_.draw(terrain_, foliageParams_, view, proj, cameraPos_, swimTime_);
   models_.drawAll(shaderProgram_, view, proj);
+  village_.draw(villageShader_, view, proj);
   gpuTimers_.end();
 
   // Ocean last: it is transparent and must blend over everything below it
@@ -508,6 +521,7 @@ void Engine::setPerFrameUniforms(GLuint prog, const glm::vec3 &lightDir,
   glActiveTexture(GL_TEXTURE0);
   // Sun shadow height map on unit 10, canopy shade on unit 6
   sunShadow_.bind(prog, 10, terrain_.getHalfExtent(), graphics_.shadowStrength, graphics_.shadows);
+  village_.bindShadow(prog, 13, graphics_.shadowStrength, graphics_.shadows);
   foliage_.bindCanopyShade(prog, 6, terrain_.getHalfExtent());
 }
 
@@ -546,7 +560,12 @@ void Engine::updateMovement(float dt) {
     float wade = glm::clamp(depth / swimDepth, 0.0f, 1.0f);
     float sp = moveSpeed_ * (keys_[GLFW_KEY_LEFT_SHIFT] ? SPRINT_MULTIPLIER : 1.0f) *
                (1.0f - 0.55f * wade);
-    cameraPos_ += input(flatFront) * sp * dt;
+    glm::vec3 walk = input(flatFront) * sp * dt;
+    int steps = std::max(1, int(std::ceil(glm::length(walk) / 0.15f)));
+    for (int step = 0; step < steps; ++step) {
+      cameraPos_ += walk / float(steps);
+      village_.collide(cameraPos_);
+    }
     foliage_.resolveCollision(cameraPos_);
     ground = terrain_.getHeightAt(cameraPos_.x, cameraPos_.z);
     surface = terrain_.getWaterSurfaceAt(cameraPos_.x, cameraPos_.z, swimTime_);
@@ -627,17 +646,25 @@ void Engine::updateMovement(float dt) {
 void Engine::regenerateTerrain() {
   terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_,
                               textureTile_, terrainParams_);
+  village_.generate(terrain_);
   replantTrees();
   placePlayerOnLand();
 }
 
 void Engine::replantTrees() {
+  foliage_.setClearing(village_.clearing());
   foliage_.generate(terrain_, foliageParams_, terrainParams_.seed);
   terrain_.buildMinimap(512, &foliage_.treeDots());
   sunShadow_.invalidate(); // trees and terrain changed: shadows are rebuilt next frame
 }
 
 void Engine::placePlayerOnLand() {
+  if (village_.active()) {
+    cameraPos_ = village_.spawn(); yaw_ = -90.0f; pitch_ = -5.0f;
+    swimming_ = underwater_ = jumping_ = false;
+    jumpVel_ = 0; oxygen_ = 1;
+    return;
+  }
   // Start on a beach looking out to sea. Walk outward from the centre in 16 directions
   // to the coast, step back inland a little, and keep the lowest spot (a beach, not a cliff).
   float waterY = terrain_.getWaterY();

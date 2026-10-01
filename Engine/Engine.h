@@ -21,6 +21,7 @@
 #include "PostProcess.h"
 #include "Skybox.h"
 #include "Models.h"
+#include "Village.h"
 #include "Renderer.h"
 
 using Clock = std::chrono::high_resolution_clock;
@@ -122,6 +123,9 @@ private:
     Foliage foliage_;
     FoliageParams foliageParams_;
     Models models_;
+    Village village_;
+    GLuint villageShader_ = 0;
+    GLuint villageShadowShader_ = 0;
     Renderer renderer_;
 
     // Configurable constants (moved from macros to members so we can change them at runtime)
@@ -212,6 +216,7 @@ public: // Public API
 
     // Player / minimap
     const Terrain& terrain() const { return terrain_; }
+    const Village& village() const { return village_; }
     const glm::vec3& getPlayerPos() const { return cameraPos_; }
     float getYaw() const { return yaw_; }
 

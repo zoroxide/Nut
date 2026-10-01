@@ -8,6 +8,7 @@ CXX ?= g++
 CXXFLAGS = -std=c++17 -O2 -Wall -I./Engine -I./Engine/gui -I./Engine/libs/imgui -I./Engine/libs/imgui/backends
 
 SRC = main.cpp \
+      Engine/Village.cpp \
       Engine/Engine.cpp \
       Engine/Camera.cpp \
       Engine/Shaders.cpp \

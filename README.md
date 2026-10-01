@@ -91,6 +91,22 @@ int main() {
 - **Enter** to free / capture the mouse
 
 # World
+
+The island now includes a procedural village built with the CC0 materials in
+`assets/textures/village`. You spawn on its central path facing the square; the
+minimap labels its location. Eight cottages have open doorways, window openings,
+beds, tables, stools, cupboards, shelves and hearths. The square includes a well,
+market stalls, crates, benches and garden fences. Walls and furniture block walking.
+The settlement chooses a dry site, levels the ground with blended edges, and clears
+vegetation from its footprint whenever terrain is regenerated. Very small maps or
+maps without enough dry land skip village placement and use the normal beach spawn.
+
+Use `build/windows/program.exe --windowed` on Windows or
+`./build/linux/program --windowed` on Linux for a windowed session (run from the
+repository root, with the platform's runtime libraries on PATH).
+`--smoke-test` checks village doorway/wall collision, renders three frames, and
+writes `build/village-smoke.ppm` for inspection.
+
 - A procedurally generated island (hills, mountains, beaches, no lakes) surrounded by an ocean
 - Ocean with Gerstner waves: walk into the sea to swim, dive to explore the sea floor,
   and keep an eye on your oxygen

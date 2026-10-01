@@ -41,6 +41,7 @@ public:
 
     // Scatter trees over the current terrain (call after every terrain generation)
     void generate(const Terrain& terrain, const FoliageParams& params, int seed);
+    void setClearing(glm::vec3 area) { clearing_ = area; }
 
     // Trees and grass; call after the terrain, before transparent objects
     void draw(const Terrain& terrain, const FoliageParams& params, const glm::mat4& view,
@@ -61,6 +62,7 @@ public:
     int lastDrawnImpostors() const { return drawnImpostors_; }
 
 private:
+    glm::vec3 clearing_{0}; // center X/Z and square half-width
     struct TreeVertex { glm::vec3 p, n; glm::vec2 uv; float layer, bend, flutter, ao; };
     struct Mesh { GLuint vao = 0, vbo = 0, ebo = 0; GLsizei count = 0; float height = 10.0f, radius = 3.0f, tile = 10.0f; };
     struct Tree { glm::vec3 pos; float yaw, scale, phase, tint; int mesh; };

@@ -429,6 +429,8 @@ void Foliage::generate(const Terrain& terrain, const FoliageParams& params, int 
             for (float x = -half + spacing; x < half - spacing; x += spacing) {
                 float px = x + (U(rng) - 0.5f) * spacing * 0.9f, pz = z + (U(rng) - 0.5f) * spacing * 0.9f;
                 float h = terrain.getHeightAt(px, pz);
+                if (clearing_.z > 0 && std::abs(px-clearing_.x)<clearing_.z+5 &&
+                    std::abs(pz-clearing_.y)<clearing_.z+5) continue;
                 if (h < beachTop || h > treeLine) continue;
                 float dx = terrain.getHeightAt(px + 1.5f, pz) - terrain.getHeightAt(px - 1.5f, pz);
                 float dz = terrain.getHeightAt(px, pz + 1.5f) - terrain.getHeightAt(px, pz - 1.5f);
@@ -657,6 +659,7 @@ void Foliage::drawGrass(const Terrain& terrain, const FoliageParams& params, con
     setWind(p, terrain, params, VP);
     auto U = [&](const char* nm) { return glGetUniformLocation(p, nm); };
     glUniform1f(U("radius"), params.grassRadius);
+    glUniform3fv(U("villageClearing"), 1, &clearing_[0]);
     glUniform1f(U("bladeHeight"), params.grassHeight);
     glUniform1f(U("terrainHalf"), terrain.getHalfExtent());
     glUniform1f(U("waterY"), terrain.getWaterY());

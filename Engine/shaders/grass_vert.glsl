@@ -8,6 +8,7 @@ uniform int cells;
 uniform int activeBlades;
 uniform int bladeVerts;      // 7 (3 segments + tip) near, 5 (2 segments + tip) far
 uniform float radius;        // overall grass distance
+uniform vec3 villageClearing;
 uniform float innerRadius;   // this ring starts here...
 uniform float ringRadius;    // ...and ends here
 uniform float widthScale;
@@ -59,6 +60,7 @@ void main() {
     vec2 cellPos = tileOrigin + (vec2(cell) + 0.5) * spacing;
     float c1 = hash(cellPos), c2 = hash(cellPos + 17.3), c3 = hash(cellPos + 5.5);
     vec2 clump = cellPos + (vec2(c1, c2) - 0.5) * spacing * 0.9;
+    if (villageClearing.z > 0.0 && all(lessThan(abs(clump-villageClearing.xy),vec2(villageClearing.z)))) { cull(); return; }
 
     float dist = length(clump - viewPos.xz);
     // Rings hand over with a dithered overlap; far clumps thin out

@@ -351,6 +351,12 @@ void GUI::drawMinimap() {
         return ImVec2(p0.x + (wx / (2.0f * half) + 0.5f) * size, p0.y + (wz / (2.0f * half) + 0.5f) * size);
     };
     ImVec2 c = toMap(pos.x, pos.z);
+    if (engine_->village().active()) {
+        glm::vec3 village = engine_->village().center();
+        ImVec2 marker = toMap(village.x, village.z);
+        dl->AddRectFilled(ImVec2(marker.x-4,marker.y-4),ImVec2(marker.x+4,marker.y+4),IM_COL32(255,210,100,255));
+        dl->AddText(ImVec2(marker.x+7,marker.y-7),IM_COL32(255,230,170,255),"Village");
+    }
     c.x = std::clamp(c.x, p0.x + 4.0f, p1.x - 4.0f);   // stay on the edge when out at sea
     c.y = std::clamp(c.y, p0.y + 4.0f, p1.y - 4.0f);
 
