@@ -1,5 +1,9 @@
 // ---------------------------------------------------------------------------
 // Shared lighting / atmosphere code, included by the scene shaders.
+// QUALITY (set by the engine from the GPU's tier): 0 potato, 1 low, 2 medium, 3 high.
+#ifndef QUALITY
+#define QUALITY 2
+#endif
 // Texture units: 3 sky cube, 8 noise, 10 sun shadow height map.
 // ---------------------------------------------------------------------------
 uniform vec3 lightDir;        // direction the sunlight travels
@@ -85,7 +89,11 @@ float terrainSunShadow(vec3 p) {
     return mix(1.0, s, shadowStrength);
 }
 
+float villageSunShadowFast(vec3 p);
 float villageSunShadow(vec3 p) {
+#if QUALITY <= 1
+    return villageSunShadowFast(p);
+#endif
     if (hasVillageShadow == 0) return 1.0;
     vec3 q = (villageLightViewProj * vec4(p, 1.0)).xyz * 0.5 + 0.5;
     if (any(lessThanEqual(q, vec3(0.0))) || any(greaterThanEqual(q, vec3(1.0)))) return 1.0;
@@ -140,8 +148,10 @@ bool villageMaskCovered(vec2 xz) { return villageMaskAt(xz).g > 0.35; }
 
 vec3 fogBaseColor(vec3 rd) {
     vec3 fc = fogColor;
+#if QUALITY >= 1
     if (hasSky == 1 && fogFromSky == 1)
         fc = skyColor(normalize(vec3(rd.x, 0.04 + max(rd.y, 0.0) * 0.5, rd.z)), max(skyMaxLod - 4.0, 0.0));
+#endif
     // Haze glows around the sun (forward scattering)
     vec3 sunDir = normalize(-lightDir);
     fc += lightColor * pow(max(dot(rd, sunDir), 0.0), 8.0) * sunGlow;

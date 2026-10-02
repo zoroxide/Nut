@@ -45,6 +45,7 @@ public:
     void setClearing(glm::vec3 area) { clearing_ = area; }
     void setPlantedTrees(const std::vector<glm::vec4>& trees) { planted_ = trees; }
     GLuint textureArray() const { return texArray_; }
+    void setPrograms(const FoliagePrograms& p) { prog_ = p; }   // after a shader reload
 
     // Trees and grass; call after the terrain, before transparent objects
     void draw(const Terrain& terrain, const FoliageParams& params, const glm::mat4& view,

@@ -45,3 +45,7 @@ cmake-build-*/
 *.sbr
 *.ini
 *.userprefs
+
+# GPU benchmark result and diagnostics (per machine)
+graphics.cfg
+gpu_report.txt

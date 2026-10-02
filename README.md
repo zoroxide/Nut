@@ -131,9 +131,24 @@ writes `build/village-smoke.ppm` for inspection.
 - Terrain presets, island shape, waves, materials, vegetation, sky, fog and graphics quality are all tweakable in the GUI
 
 # Performance
-Built to hold 60 FPS on integrated graphics (tested on Intel HD 620, 1920x1080):
-chunked terrain LOD, compressed textures, billboard trees in the distance, and an adaptive render
-resolution (Tab -> Graphics & Performance: quality preset, target FPS, per-pass GPU timings)
+The game adapts itself to the GPU it runs on:
+
+- **GPU detection**: on start it reads the GPU name, driver and video memory and picks a
+  starting quality tier for that GPU family (old / low-end Radeon HD and GeForce GT, Intel HD,
+  modern cards).
+- **Benchmark**: on the first launch (and after a driver or GPU change) it renders a demanding
+  view at two resolutions per tier for a few seconds, predicts the resolution each tier can
+  hold at 60 FPS and keeps the best one. The result is saved in `graphics.cfg`; delete the file
+  or press *Re-run GPU benchmark* (Tab -> Graphics & Performance) to measure again.
+- **Quality tiers** (Potato, Low, Medium, High) change more than resolution: lower tiers compile
+  simpler shaders (no normal maps, single-tap shadows, fewer lights, no caustics), turn off
+  bloom / sun rays, use less texture filtering, smaller shadow maps and less grass and tree detail.
+- **At runtime** the render resolution adapts every frame, and if even the lowest resolution
+  can't hold the target for a few seconds the game drops a tier (and goes back up when there
+  is headroom).
+- **`gpu_report.txt`** is written next to the game: GPU, driver, video memory, benchmark
+  results, GPU time per pass and any shader compiler messages. Send it along when reporting
+  performance problems on a specific machine.
 
 # Assets
 HDRI skies (`assets/panoramas`), terrain materials (`assets/textures/terrain`) and the bark / leaf textures

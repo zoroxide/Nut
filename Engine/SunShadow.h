@@ -18,6 +18,7 @@ public:
     bool needsRebuild(const glm::vec3& sunDir) const;
     void bind(GLuint prog, int unit, float halfExtent, float strength, bool enabled) const;
     void invalidate() { built_ = false; }
+    void setProgram(GLuint p) { prog_ = p; }
 
 private:
     GLuint prog_ = 0, fbo_ = 0, tex_ = 0, vao_ = 0;

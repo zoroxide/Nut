@@ -113,6 +113,9 @@ public:
     // Shaded relief map of the island for the HUD minimap (0 when there is none).
     // Texture u runs along world +X, v along world +Z, covering the whole terrain.
     GLuint minimapTexture() const { return isFlat_ ? 0 : minimapTex_; }
+    // Ground material texture arrays (for quality settings such as anisotropic filtering)
+    GLuint materialAlbedo() const { return matAlbedo_; }
+    GLuint materialNormal() const { return matNormal_; }
 
     // Ocean: drawn after all opaque objects, with its own shader (water_vert/water_frag)
     void drawWater(GLuint waterProgram, const glm::mat4& view, const glm::mat4& proj, const glm::vec3& cameraPos, float time);

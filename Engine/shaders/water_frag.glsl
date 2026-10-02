@@ -28,7 +28,11 @@ void main() {
 
     // Fine ripples from two scrolling layers of the ripple texture (fade out with distance)
     vec4 r1 = texture(waterDetail, p * (1.0 / 14.0) + time * vec2(0.020, 0.011));
+#if QUALITY >= 1
     vec4 r2 = texture(waterDetail, p * (1.0 / 5.3) - time * vec2(0.013, 0.027));
+#else
+    vec4 r2 = r1.gbar;
+#endif
     vec2 d = ((r1.rg - 0.5) * 1.1 + (r2.rg - 0.5) * 0.7) * (1.0 - smoothstep(40.0, 350.0, dist));
     vec3 n = normalize(WaveNormal + vec3(d.x, 0.0, d.y));
     float choppyFoam = 0.6 * smoothstep(0.2, 1.0, choppiness);

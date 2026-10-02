@@ -177,3 +177,11 @@ GLuint Textures::loadMaterialArray(const std::string& dir, const char* const* na
                     GL_RGB8, GL_RGB, anisotropy);
     return tex;
 }
+
+void Textures::setAnisotropy(GLuint tex, GLenum target, float amount) {
+    if (!tex || !GLEW_EXT_texture_filter_anisotropic) return;
+    GLfloat maxAniso = 1.0f;
+    glGetFloatv(0x84FF /*GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT*/, &maxAniso);
+    glBindTexture(target, tex);
+    glTexParameterf(target, 0x84FE /*GL_TEXTURE_MAX_ANISOTROPY_EXT*/, std::max(1.0f, std::min(amount, maxAniso)));
+}

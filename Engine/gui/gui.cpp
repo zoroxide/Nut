@@ -142,12 +142,39 @@ void GUI::drawSkyPanel() {
     }
 }
 
+void GUI::renderOverlayMessage(const std::string& text) {
+    if (!initialized_) return;
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.75f);
+    ImGui::Begin("##overlay", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
+    ImGui::TextUnformatted(text.c_str());
+    ImGui::TextDisabled("This runs once per GPU / driver (saved in graphics.cfg).");
+    ImGui::End();
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
 void GUI::drawGraphicsPanel() {
     if (!ImGui::CollapsingHeader("Graphics & Performance", ImGuiTreeNodeFlags_DefaultOpen)) return;
     GraphicsSettings& G = engine_->graphics();
-    static int quality = 1;
-    const char* levels[] = { "Low", "Medium", "High" };
-    if (ImGui::Combo("Quality", &quality, levels, 3)) G = GraphicsSettings::preset(quality);
+    const GpuInfo& gpu = engine_->gpu();
+    ImGui::TextWrapped("GPU: %s", gpu.renderer.c_str());
+    ImGui::TextDisabled("%s, %s, OpenGL %s", gpu.vendorName().c_str(),
+                        gpu.vramMB > 0 ? (std::to_string(gpu.vramMB) + " MB").c_str() : "VRAM unknown", gpu.version.c_str());
+    int tier = G.tier;
+    const char* tiers[] = { "Potato", "Low", "Medium", "High" };
+    if (ImGui::Combo("Quality", &tier, tiers, 4)) engine_->applyTier(tier, "chosen in the settings");
+    ImGui::Checkbox("Adapt quality to the GPU automatically", &G.autoTier);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Drops to a lower tier when even the lowest resolution can't hold the target FPS");
+    if (!engine_->lastQualityChange().empty()) ImGui::TextDisabled("Last change: %s", engine_->lastQualityChange().c_str());
+    if (ImGui::Button("Re-run GPU benchmark")) engine_->requestBenchmark();
+    ImGui::SameLine();
+    ImGui::TextDisabled("(details in gpu_report.txt)");
 
     // Live numbers: resolution scale and GPU time per pass
     const GpuTimers& T = engine_->gpuTimers();

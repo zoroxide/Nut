@@ -22,6 +22,8 @@ public:
     // Render the GUI for one frame. Should be called every frame before
     // swap buffers.
     void render();
+    // A centred message drawn on top of the current frame (used while benchmarking the GPU)
+    void renderOverlayMessage(const std::string& text);
 
 private:
     void drawTerrainPanel();

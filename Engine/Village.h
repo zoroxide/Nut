@@ -60,6 +60,11 @@ public:
     float plazaRadius() const { return plazaR_; }
     int houseCount() const { return (int)houses_.size(); }
     int lastDrawnHouses() const { return drawnHouses_; }
+    // Quality settings
+    void setShadowResolution(int res);
+    void setMaxHouseLights(int n) { maxHouseLights_ = n; }
+    GLuint albedoTexture() const { return albedo_; }
+    GLuint normalTexture() const { return normal_; }
     // For tests: a point standing in an open doorway, and one inside a wall
     glm::vec3 testDoorway() const { return testDoor_; }
     glm::vec3 testWall() const { return testWall_; }
@@ -127,6 +132,7 @@ private:
     glm::mat4 shadowMatrix_{1.0f};
     glm::vec3 shadowSun_{0.0f};
     bool shadowBuilt_ = false;
-    static constexpr int kShadowResolution = 2048;
+    int shadowRes_ = 2048;
+    int maxHouseLights_ = 4;
     mutable int drawnHouses_ = 0;
 };

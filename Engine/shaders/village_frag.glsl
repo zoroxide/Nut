@@ -107,7 +107,7 @@ void main() {
         } else {
             base = tex * Tint;
         }
-        if (hasNormal) {
+        if (QUALITY >= 1 && hasNormal) {
             vec2 xy = texture(normalMaps, vec3(UV, float(layer))).rg * 2.0 - 1.0;
             vec3 tn = vec3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
             vec3 T = normalize(Tangent - n * dot(Tangent, n));

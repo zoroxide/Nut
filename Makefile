@@ -18,6 +18,7 @@ SRC = main.cpp \
       Engine/Textures.cpp \
       Engine/SunShadow.cpp \
       Engine/PostProcess.cpp \
+      Engine/GpuProfile.cpp \
       Engine/Skybox.cpp \
       Engine/Models.cpp \
       Engine/Renderer.cpp \

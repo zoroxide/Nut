@@ -18,6 +18,7 @@
 #include "Foliage.h"
 #include "Graphics.h"
 #include "SunShadow.h"
+#include "GpuProfile.h"
 #include "PostProcess.h"
 #include "Skybox.h"
 #include "Models.h"
@@ -127,6 +128,18 @@ private:
     GLuint villageShader_ = 0;
     GLuint villageShadowShader_ = 0;
     bool villageLamps_ = true;
+    // GPU profile / auto quality
+    GpuInfo gpu_;
+    bool needBenchmark_ = false, tierFromCache_ = false;
+    int benchTier_ = 3;                     // highest tier the benchmark allowed
+    float overBudgetTime_ = 0.0f, underBudgetTime_ = 0.0f;
+    std::string tierReason_;
+    std::vector<BenchmarkSample> benchSamples_;
+    void runGpuBenchmark();
+    void refreshPrograms();
+    void applyTextureQuality();
+    void updateQualityGovernor(float dt);
+    void writeGpuReport();
     float lampIntensity_ = 1.0f;
     // Nearest point lights this frame (outdoor ones first), uploaded to every scene shader
     int numPointLights_ = 0, numOutdoorLights_ = 0;
@@ -203,6 +216,12 @@ public: // Public API
 
     // Rendering quality / post-processing
     GraphicsSettings& graphics() { return graphics_; }
+    // GPU-aware quality: tier per GPU (benchmarked once, cached in graphics.cfg), adjusted at runtime
+    const GpuInfo& gpu() const { return gpu_; }
+    void applyTier(int tier, const char* reason = nullptr);
+    void requestBenchmark() { needBenchmark_ = true; }
+    const std::string& lastQualityChange() const { return tierReason_; }
+    int benchmarkTier() const { return benchTier_; }
     const GpuTimers& gpuTimers() const { return gpuTimers_; }
     float renderScale() const { return post_.scale(); }
     int terrainTriangles() const { return terrain_.lastDrawnTriangles(); }

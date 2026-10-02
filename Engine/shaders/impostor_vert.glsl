@@ -30,8 +30,10 @@ void main() {
     float c = cos(-iPosYaw.w), s = sin(-iPosYaw.w);
     vec2 local = vec2(c * toCam.x - s * toCam.y, s * toCam.x + c * toCam.y);
     float theta = atan(-local.x, local.y);
-    int k = int(floor(theta / (6.2831853 / float(views)) + 0.5));
-    k = (k % views + views) % views;
+    // wrap into 0..views-1 without % (undefined for negative numbers; AMD and Intel differ)
+    float fv = float(views);
+    float kf = floor(theta / (6.2831853 / fv) + 0.5);
+    int k = int(kf - fv * floor(kf / fv));
 
     vec3 p = base + right * aCorner.x * S + vec3(0.0, aCorner.y * S - 0.5 * iParams.x, 0.0);
     // Gentle sway of the top

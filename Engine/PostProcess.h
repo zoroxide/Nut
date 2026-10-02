@@ -30,6 +30,7 @@ public:
     ~PostProcess();
     struct Programs { GLuint bright = 0, blur = 0, rays = 0, composite = 0; };
     bool init(const Programs& p);
+    void setPrograms(const Programs& p) { prog_ = p; }
 
     // Bind the scene target for this frame; returns the scene viewport size
     glm::ivec2 beginScene(int windowW, int windowH, float scale);
@@ -41,6 +42,7 @@ public:
     float updateScale(const GraphicsSettings& g, float gpuFrameMs);
     int framesSinceStart_ = 0;
     float scale() const { return scale_; }
+    void setScale(float s) { scale_ = s; }
 
 private:
     void allocate(int w, int h);

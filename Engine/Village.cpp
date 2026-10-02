@@ -1419,7 +1419,7 @@ void Village::draw(GLuint p, GLuint depthProgram, const glm::mat4& view, const g
         glm::vec4 pos[4], col[4];
         int n = 0;
         if (r.house >= 0 && lightScale > 0.0f)
-            for (int li = 0; li < (int)lights_.size() && n < 4; ++li) {
+            for (int li = 0; li < (int)lights_.size() && n < std::min(4, maxHouseLights_); ++li) {
                 const VillageLight& L = lights_[li];
                 if (L.house != r.house) continue;
                 float f = 1.0f;
@@ -1484,7 +1484,7 @@ void Village::buildShadow(GLuint program, const glm::vec3& sunDir) {
     if (!shadowTex_) {
         glGenTextures(1, &shadowTex_);
         glBindTexture(GL_TEXTURE_2D, shadowTex_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kShadowResolution, kShadowResolution, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, shadowRes_, shadowRes_, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
@@ -1512,7 +1512,7 @@ void Village::buildShadow(GLuint program, const glm::vec3& sunDir) {
     float H = radius_ + 12.0f;
     shadowMatrix_ = glm::ortho(-H, H, -H, H, 1.0f, 400.0f) * glm::lookAt(target + sun * 200.0f, target, up);
     glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
-    glViewport(0, 0, kShadowResolution, kShadowResolution);
+    glViewport(0, 0, shadowRes_, shadowRes_);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
@@ -1590,4 +1590,13 @@ void Village::collide(glm::vec3& eye) const {
             glm::vec2 w = c.ax * lx + az * lz;
             eye.x = c.c.x + w.x; eye.z = c.c.y + w.y;
         }
+}
+
+void Village::setShadowResolution(int res) {
+    if (res == shadowRes_) return;
+    shadowRes_ = res;
+    if (shadowFbo_) glDeleteFramebuffers(1, &shadowFbo_);
+    if (shadowTex_) glDeleteTextures(1, &shadowTex_);
+    shadowFbo_ = shadowTex_ = 0;
+    shadowBuilt_ = false;   // rebuilt at the new size next frame
 }

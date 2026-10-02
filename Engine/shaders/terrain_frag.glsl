@@ -94,7 +94,14 @@ void main() {
     vec4 nz = noise4(P.xz * (1.0 / 260.0));
     float macro = nz.r;
     float mid = noise4(P.xz * (1.0 / 65.0)).g;
-    bool detail = dist < 70.0;    // normal maps only up close (texture bandwidth is the main cost)
+    // normal maps only up close (texture bandwidth is the main cost)
+#if QUALITY == 0
+    bool detail = false;
+#elif QUALITY >= 3
+    bool detail = dist < 110.0;
+#else
+    bool detail = dist < 70.0;
+#endif
 
     float wRock = smoothstep(rockSlope, rockSlope + 0.12, slope + (mid - 0.5) * 0.12);
     float wSand = 1.0 - smoothstep(waterY + beachWidth * 0.3, waterY + beachWidth + (mid - 0.5) * beachWidth, P.y);
@@ -111,10 +118,12 @@ void main() {
         if (customGrass == 1) { aG = texture(texture1, uvG).rgb; nG = N; }
         else sampleTop(0, uvG, N, detail, aG, nG);
         // Larger-scale second sample hides tiling in the distance
+#if QUALITY >= 2
         vec3 aFar = texture(matAlbedo, vec3(uvG * 0.13 + 0.37, 0)).rgb;
         aG = mix(aG, aG * aFar * 2.2, 0.35 + 0.3 * smoothstep(20.0, 120.0, dist));
+#endif
         albedo = aG; n = nG;
-        if (wGrass2 > 0.01) {
+        if (QUALITY >= 1 && wGrass2 > 0.01) {
             sampleTop(1, uvG * 0.8, N, detail, a2, n2);
             albedo = mix(albedo, a2, wGrass2); n = normalize(mix(n, n2, wGrass2));
         }
@@ -124,7 +133,11 @@ void main() {
             albedo = mix(albedo, aS * sandTint, wSand); n = normalize(mix(n, nS, wSand));
         }
         if (wRock > 0.01) {
+#if QUALITY >= 2
             sampleTriplanar(2, P * (0.09 * texScale), N, detail, aR, nR);
+#else
+            sampleTop(2, P.xz * (0.09 * texScale), N, detail, aR, nR);
+#endif
             albedo = mix(albedo, aR * rockTint, wRock); n = normalize(mix(n, nR, wRock));
         }
         if (wSnow > 0.01) {
@@ -167,7 +180,7 @@ void main() {
     float spec = pow(max(dot(viewDir, reflect(-light, n)), 0.0), 32.0);
     lit += lightColor * spec * shadow * (0.25 * wSnow + 0.12 * wSand * (1.0 - smoothstep(waterY, waterY + 0.6, P.y)));
 
-    if (depthBelow > 0.0 && depthBelow < 25.0) {
+    if (QUALITY >= 2 && depthBelow > 0.0 && depthBelow < 25.0) {
         float c = caustics(P.xz, time) * exp(-depthBelow * 0.12) * max(dot(N, light), 0.0) * shadow;
         lit += lightColor * c * 1.3;
     }

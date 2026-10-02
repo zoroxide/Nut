@@ -1,5 +1,6 @@
 #include "Engine.h"
 #include "Textures.h"
+#include <sstream>
 #include "PostProcess.h"
 #include "gui/gui.h"
 
@@ -116,6 +117,26 @@ bool Engine::init(bool fullscreen) {
     return false;
   }
 
+  // Which GPU is this? Pick the quality tier before any shader is compiled: the one the
+  // benchmark chose last time for this GPU + driver, or a guess from the GPU family
+  // (then benchmarked on the first frame).
+  gpu_ = GpuProfile::detect();
+  int tier = gpu_.suggestedTier;
+  tierFromCache_ = GpuProfile::loadCache("graphics.cfg", gpu_, tier);
+  needBenchmark_ = !tierFromCache_;
+  benchTier_ = tierFromCache_ ? tier : 3;
+  std::cout << "GPU: " << gpu_.renderer << " (" << gpu_.vendorName() << ", "
+            << (gpu_.vramMB > 0 ? std::to_string(gpu_.vramMB) + " MB" : std::string("VRAM unknown")) << ", OpenGL "
+            << gpu_.version << ")\nQuality tier: " << GraphicsSettings::tierName(tier)
+            << (tierFromCache_ ? " (saved benchmark result)" : " (initial guess; benchmarking on start)") << "\n";
+  graphics_ = GraphicsSettings::forTier(tier);
+  foliageParams_.grassEnabled = graphics_.grass;
+  foliageParams_.grassDensity = graphics_.grassDensity;
+  foliageParams_.grassRadius = graphics_.grassRadius;
+  foliageParams_.treeDetailDistance = graphics_.treeDetailDistance;
+  foliageParams_.treeDistance = graphics_.treeDistance;
+  shaders_.setDefines("#define QUALITY " + std::to_string(graphics_.shaderQuality()) + "\n");
+
   // Input
   glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
   glfwSetCursorPosCallback(window_, Engine::cursorPosCallbackStatic);
@@ -188,9 +209,185 @@ bool Engine::init(bool fullscreen) {
   if (gui_)
     gui_->init(window_);
 
+  village_.setShadowResolution(graphics_.villageShadowRes);
+  village_.setMaxHouseLights(graphics_.maxHouseLights);
+  applyTextureQuality();
   setupSamplerUnits();
+  writeGpuReport();
 
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// GPU-aware quality
+// ---------------------------------------------------------------------------
+void Engine::refreshPrograms() {
+  shaderProgram_ = shaders_.get("terrain");
+  skyShader_ = shaders_.get("sky");
+  waterShader_ = shaders_.get("water");
+  grassShader_ = shaders_.get("grass");
+  treeShader_ = shaders_.get("tree");
+  treeBakeShader_ = shaders_.get("treeBake");
+  impostorShader_ = shaders_.get("impostor");
+  sunShadowShader_ = shaders_.get("sunShadow");
+  terrainShader_ = shaders_.get("terrainLod");
+  villageShader_ = shaders_.get("village");
+  villageShadowShader_ = shaders_.get("villageShadow");
+  renderer_.setPrograms(terrainShader_, shaderProgram_, skyShader_);
+  sky_.setShader(skyShader_);
+  sunShadow_.setProgram(sunShadowShader_);
+  FoliagePrograms fp;
+  fp.grass = grassShader_; fp.tree = treeShader_; fp.treeBake = treeBakeShader_; fp.impostor = impostorShader_;
+  foliage_.setPrograms(fp);
+  PostProcess::Programs pp;
+  pp.bright = shaders_.get("postBright"); pp.blur = shaders_.get("postBlur");
+  pp.rays = shaders_.get("postRays"); pp.composite = shaders_.get("postComposite");
+  post_.setPrograms(pp);
+}
+
+void Engine::applyTextureQuality() {
+  // Anisotropic filtering is cheap on modern GPUs and very expensive on old / low-bandwidth ones
+  float a = graphics_.anisotropy;
+  Textures::setAnisotropy(terrain_.materialAlbedo(), GL_TEXTURE_2D_ARRAY, a);
+  Textures::setAnisotropy(terrain_.materialNormal(), GL_TEXTURE_2D_ARRAY, std::max(1.0f, a * 0.5f));
+  Textures::setAnisotropy(village_.albedoTexture(), GL_TEXTURE_2D_ARRAY, a);
+  Textures::setAnisotropy(village_.normalTexture(), GL_TEXTURE_2D_ARRAY, std::max(1.0f, a * 0.5f));
+  Textures::setAnisotropy(foliage_.textureArray(), GL_TEXTURE_2D_ARRAY, std::min(a, 4.0f));
+}
+
+void Engine::applyTier(int tier, const char *reason) {
+  tier = glm::clamp(tier, 0, 3);
+  int oldQuality = graphics_.shaderQuality();
+  GraphicsSettings g = GraphicsSettings::forTier(tier);
+  g.autoTier = graphics_.autoTier;
+  g.targetFps = graphics_.targetFps;
+  graphics_ = g;
+  foliageParams_.grassEnabled = g.grass;
+  foliageParams_.grassDensity = g.grassDensity;
+  foliageParams_.grassRadius = g.grassRadius;
+  foliageParams_.treeDetailDistance = g.treeDetailDistance;
+  foliageParams_.treeDistance = g.treeDistance;
+  if (g.shaderQuality() != oldQuality) {
+    // Different shader complexity: recompile everything with the new QUALITY level
+    shaders_.setDefines("#define QUALITY " + std::to_string(g.shaderQuality()) + "\n");
+    shaders_.reloadAll();
+    refreshPrograms();
+    setupSamplerUnits();
+    sunShadow_.invalidate();
+  }
+  village_.setShadowResolution(g.villageShadowRes);
+  village_.setMaxHouseLights(g.maxHouseLights);
+  applyTextureQuality();
+  post_.setScale(glm::clamp(post_.scale(), g.minScale, g.maxScale));
+  overBudgetTime_ = underBudgetTime_ = 0.0f;
+  if (reason) {
+    tierReason_ = std::string(GraphicsSettings::tierName(tier)) + ": " + reason;
+    std::cout << "Quality tier -> " << tierReason_ << "\n";
+  }
+}
+
+void Engine::updateQualityGovernor(float dt) {
+  // Dynamic resolution handles small swings. When even the lowest resolution can't hold the
+  // target for a few seconds, drop a tier (simpler shaders, fewer effects); when the GPU idles at
+  // full resolution for a long time, go back up (never above what the benchmark allowed).
+  if (!graphics_.autoTier || !graphics_.autoResolution || needBenchmark_) return;
+  float gpu = gpuTimers_.lastTotalMs();
+  float budget = 1000.0f / std::max(graphics_.targetFps, 10.0f);
+  float s = post_.scale();
+  if (s <= graphics_.minScale + 0.01f && gpu > budget * 0.95f) overBudgetTime_ += dt;
+  else overBudgetTime_ = std::max(0.0f, overBudgetTime_ - dt * 0.5f);
+  if (s >= graphics_.maxScale - 0.01f && gpu < budget * 0.55f) underBudgetTime_ += dt;
+  else underBudgetTime_ = 0.0f;
+  if (overBudgetTime_ > 4.0f && graphics_.tier > 0)
+    applyTier(graphics_.tier - 1, "the GPU couldn't hold the target frame rate");
+  else if (underBudgetTime_ > 20.0f && graphics_.tier < benchTier_)
+    applyTier(graphics_.tier + 1, "the GPU has plenty of headroom");
+}
+
+void Engine::runGpuBenchmark() {
+  // Render a demanding view (the village street, or the spawn point) at two resolutions per tier,
+  // timing whole frames. Frame time ~ fixed + perPixel * scale^2, so two samples predict the
+  // resolution each tier can reach at the target frame rate. Pick the best tier that still runs
+  // at a decent resolution, save it in graphics.cfg and write gpu_report.txt.
+  needBenchmark_ = false;
+  benchSamples_.clear();
+  glm::vec3 savePos = cameraPos_;
+  float saveYaw = yaw_, savePitch = pitch_;
+  bool saveSwim = swimming_, saveAuto = graphics_.autoTier;
+  float saveTarget = graphics_.targetFps;
+  if (village_.active()) { cameraPos_ = village_.spawn(); yaw_ = village_.spawnYaw(); }
+  pitch_ = -4.0f;
+  swimming_ = underwater_ = false;
+  int fbW = 1280, fbH = 720;
+  glfwGetFramebufferSize(window_, &fbW, &fbH);
+
+  auto showMessage = [&](const std::string &msg) {
+    if (gui_) gui_->renderOverlayMessage(msg);
+    glfwSwapBuffers(window_);
+    glfwPollEvents();
+  };
+  auto measure = [&](int tier, float scale) {
+    applyTier(tier);
+    graphics_.autoResolution = false;
+    graphics_.renderScale = scale;
+    post_.setScale(scale);
+    std::string msg = "Optimizing graphics for " + gpu_.renderer + "...   (testing " + GraphicsSettings::tierName(tier) + ")";
+    for (int i = 0; i < 6; ++i) { renderFrame(0, fbW, fbH); showMessage(msg); }
+    double total = 0.0;
+    const int N = 12;
+    for (int i = 0; i < N; ++i) {
+      glFinish();
+      auto t0 = Clock::now();
+      swimTime_ += 1.0f / 60.0f;
+      renderFrame(0, fbW, fbH);
+      glFinish();
+      total += std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+      showMessage(msg);
+    }
+    float ms = (float)(total / N);
+    benchSamples_.push_back({tier, scale, ms});
+    return ms;
+  };
+  const float budget = 1000.0f / std::max(saveTarget, 30.0f) * 0.9f;
+  static const float needScale[4] = {0.0f, 0.5f, 0.6f, 0.72f};
+  auto reachableScale = [&](int tier) {
+    float a = measure(tier, 0.5f), b = measure(tier, 0.85f);
+    float perPixel = std::max((b - a) / (0.85f * 0.85f - 0.25f), 0.01f);
+    float fixed = a - perPixel * 0.25f;
+    float s = (budget - fixed) / perPixel;
+    float result = s > 0.0f ? std::sqrt(s) : 0.0f;
+    std::cout << "  benchmark " << GraphicsSettings::tierName(tier) << ": " << a << " ms @50%, " << b
+              << " ms @85% -> about " << int(result * 100) << "% resolution at " << saveTarget << " fps\n";
+    return result;
+  };
+  auto good = [&](int tier) { return tier == 0 || reachableScale(tier) >= needScale[tier]; };
+
+  int t = gpu_.suggestedTier, chosen;
+  if (good(t)) {
+    chosen = t;
+    while (chosen < 3 && good(chosen + 1)) ++chosen;
+  } else {
+    chosen = t - 1;
+    while (chosen > 0 && !good(chosen)) --chosen;
+    chosen = std::max(chosen, 0);
+  }
+  graphics_.autoTier = saveAuto;
+  graphics_.targetFps = saveTarget;
+  applyTier(chosen, "chosen by the GPU benchmark");
+  graphics_.autoResolution = true;
+  benchTier_ = chosen;
+  tierFromCache_ = false;
+  GpuProfile::saveCache("graphics.cfg", gpu_, chosen);
+  cameraPos_ = savePos; yaw_ = saveYaw; pitch_ = savePitch; swimming_ = saveSwim;
+  writeGpuReport();
+}
+
+void Engine::writeGpuReport() {
+  std::ostringstream passes;
+  for (const auto &n : gpuTimers_.names()) passes << "  " << n << ": " << gpuTimers_.ms(n) << " ms\n";
+  if (!gpuTimers_.names().empty())
+    passes << "  render scale: " << int(post_.scale() * 100) << "%\n";
+  GpuProfile::writeReport("gpu_report.txt", gpu_, graphics_.tier, tierFromCache_, benchSamples_, passes.str(), shaders_.log());
 }
 
 void Engine::vsync(bool enabled) {
@@ -401,6 +598,9 @@ void Engine::mainloop() {
   if (!window_)
     return;
   setupSamplerUnits();
+  if (needBenchmark_)
+    runGpuBenchmark();
+  double reportAt = glfwGetTime() + 20.0;   // refresh gpu_report.txt with real per-pass timings
 
   lastFrame_ = Clock::now();
   while (!glfwWindowShouldClose(window_)) {
@@ -413,9 +613,16 @@ void Engine::mainloop() {
     // Render at the framebuffer size (differs from the window size on HiDPI screens)
     int fbW, fbH;
     glfwGetFramebufferSize(window_, &fbW, &fbH);
+    if (needBenchmark_)
+      runGpuBenchmark();   // requested from the settings panel
     if (fbW > 0 && fbH > 0) {
       renderFrame(0, fbW, fbH);
       gui_->render();
+    }
+    updateQualityGovernor(deltaTime_);
+    if (glfwGetTime() > reportAt) {
+      writeGpuReport();
+      reportAt = 1e30;
     }
     glfwSwapBuffers(window_);
     glfwPollEvents();
@@ -688,7 +895,7 @@ void Engine::gatherLights(const glm::vec3 &sunColor) {
     if (d < 160.0f) order.push_back({d, i});
   }
   std::sort(order.begin(), order.end());
-  if (order.size() > 6) order.resize(6);
+  if ((int)order.size() > graphics_.maxOutdoorLights) order.resize(std::max(0, graphics_.maxOutdoorLights));
   float daylight = glm::smoothstep(0.3f, 0.9f, glm::dot(sunColor, glm::vec3(0.3f, 0.6f, 0.1f)));
   daylight_ = daylight;
   float t = swimTime_;
