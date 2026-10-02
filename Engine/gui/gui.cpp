@@ -197,6 +197,24 @@ void GUI::drawGraphicsPanel() {
     }
 }
 
+void GUI::drawVillagePanel() {
+    if (!ImGui::CollapsingHeader("Village", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    const Village& v = engine_->village();
+    if (!v.active()) {
+        ImGui::TextDisabled("No village on this terrain (needs a dry, gentle site)");
+    } else {
+        ImGui::Text("%d houses, %d streets, %d lights", v.houseCount(), (int)v.streets().size(), (int)v.lights().size());
+        if (ImGui::Button("Go to the village")) engine_->teleportToVillage();
+    }
+    ImGui::Checkbox("Lamps, lanterns & fires", &engine_->villageLamps());
+    ImGui::SliderFloat("Light Intensity", &engine_->lampIntensity(), 0.0f, 3.0f);
+    if (ImGui::Button("New village (new seed)")) {
+        engine_->terrainParams().seed += 1;
+        engine_->regenerateVillage();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Regenerates the island with the next seed (the village is planned into the terrain)");
+}
+
 void GUI::drawFoliagePanel() {
     if (!ImGui::CollapsingHeader("Grass & Trees", ImGuiTreeNodeFlags_DefaultOpen)) return;
     FoliageParams& F = engine_->foliageParams();
@@ -351,11 +369,31 @@ void GUI::drawMinimap() {
         return ImVec2(p0.x + (wx / (2.0f * half) + 0.5f) * size, p0.y + (wz / (2.0f * half) + 0.5f) * size);
     };
     ImVec2 c = toMap(pos.x, pos.z);
-    if (engine_->village().active()) {
-        glm::vec3 village = engine_->village().center();
-        ImVec2 marker = toMap(village.x, village.z);
-        dl->AddRectFilled(ImVec2(marker.x-4,marker.y-4),ImVec2(marker.x+4,marker.y+4),IM_COL32(255,210,100,255));
-        dl->AddText(ImVec2(marker.x+7,marker.y-7),IM_COL32(255,230,170,255),"Village");
+    // The village: cobbled streets, the plaza and every house (roof colour), true to scale
+    const Village& vil = engine_->village();
+    if (vil.active()) {
+        dl->PushClipRect(p0, p1, true);
+        float px = size / (2.0f * half);
+        float streetW = std::max(1.5f, 4.2f * px);
+        for (const auto& st : vil.streets()) {
+            std::vector<ImVec2> pts;
+            for (const auto& q : st) pts.push_back(toMap(q.x, q.y));
+            dl->AddPolyline(pts.data(), (int)pts.size(), IM_COL32(205, 195, 175, 230), 0, streetW);
+        }
+        glm::vec3 vc = vil.center();
+        dl->AddCircleFilled(toMap(vc.x, vc.z), std::max(2.5f, vil.plazaRadius() * px), IM_COL32(210, 200, 180, 235));
+        for (const auto& hs : vil.mapHouses()) {
+            glm::vec2 az(-hs.axisX.y, hs.axisX.x);
+            glm::vec2 hx = hs.axisX * hs.half.x, hz = az * hs.half.y;
+            ImVec2 q[4] = { toMap(hs.center.x - hx.x - hz.x, hs.center.y - hx.y - hz.y), toMap(hs.center.x + hx.x - hz.x, hs.center.y + hx.y - hz.y),
+                            toMap(hs.center.x + hx.x + hz.x, hs.center.y + hx.y + hz.y), toMap(hs.center.x - hx.x + hz.x, hs.center.y - hx.y + hz.y) };
+            ImU32 roof = IM_COL32((int)(glm::clamp(hs.roof.r, 0.0f, 1.0f) * 255), (int)(glm::clamp(hs.roof.g, 0.0f, 1.0f) * 255),
+                                  (int)(glm::clamp(hs.roof.b, 0.0f, 1.0f) * 255), 255);
+            dl->AddQuadFilled(q[0], q[1], q[2], q[3], roof);
+            if (large) dl->AddQuad(q[0], q[1], q[2], q[3], IM_COL32(60, 30, 20, 160), 1.0f);
+        }
+        if (!large) dl->AddText(ImVec2(toMap(vc.x, vc.z).x + 6, toMap(vc.x, vc.z).y - 16), IM_COL32(255, 235, 190, 230), "Village");
+        dl->PopClipRect();
     }
     c.x = std::clamp(c.x, p0.x + 4.0f, p1.x - 4.0f);   // stay on the edge when out at sea
     c.y = std::clamp(c.y, p0.y + 4.0f, p1.y - 4.0f);
@@ -506,6 +544,7 @@ void GUI::render() {
 
     drawTerrainPanel();
     drawFoliagePanel();
+    drawVillagePanel();
 
     ImGui::End();
     }

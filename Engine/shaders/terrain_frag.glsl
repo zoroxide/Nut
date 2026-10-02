@@ -131,6 +131,16 @@ void main() {
             sampleTop(4, uvS * 0.6, N, detail, aSn, nSn);
             albedo = mix(albedo, aSn * snowTint, wSnow); n = normalize(mix(n, nSn, wSnow));
         }
+        // Village cobblestone streets: irregular worn edges where grass creeps between the stones
+        float pave = villageMaskAt(P.xz).r;
+        if (pave > 0.01) {
+            float edge = noise4(P.xz * (1.0 / 6.0)).b;
+            float wPave = smoothstep(0.25, 0.75, pave + (edge - 0.5) * 0.45);
+            vec3 aP, nP;
+            sampleTop(5, P.xz * (0.32 * texScale), N, detail, aP, nP);
+            albedo = mix(albedo, aP * vec3(0.95, 0.92, 0.88), wPave);
+            n = normalize(mix(n, nP, wPave));
+        }
     } else {
         vec3 grass = (customGrass == 1 ? texture(texture1, P.xz * 0.2).rgb : vec3(0.30, 0.45, 0.18)) * grassTint;
         albedo = mix(grass, vec3(0.8, 0.72, 0.5) * sandTint, wSand);
@@ -153,7 +163,7 @@ void main() {
     float wrap = clamp((ndl + 0.25) / 1.25, 0.0, 1.0);
     float macroShade = mix(0.75, 1.0, clamp(dot(N, light) * 0.5 + 0.5, 0.0, 1.0));
     vec3 sun = lightColor * (0.6 * diff + 0.4 * wrap * wrap) * macroShade * shadow;
-    vec3 lit = (amb + sun) * albedo;
+    vec3 lit = (amb + sun + pointLighting(P, n, numOutdoorLights)) * albedo;
     float spec = pow(max(dot(viewDir, reflect(-light, n)), 0.0), 32.0);
     lit += lightColor * spec * shadow * (0.25 * wSnow + 0.12 * wSand * (1.0 - smoothstep(waterY, waterY + 0.6, P.y)));
 

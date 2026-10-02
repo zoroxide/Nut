@@ -6,9 +6,9 @@ uniform vec2 tileOrigin;
 uniform float spacing;
 uniform int cells;
 uniform int activeBlades;
-uniform int bladeVerts;      // 7 (3 segments + tip) near, 5 (2 segments + tip) far
+uniform int bladeVerts;
+uniform int grassLights;     // street lamps on the grass (only when it is dark enough to matter)      // 7 (3 segments + tip) near, 5 (2 segments + tip) far
 uniform float radius;        // overall grass distance
-uniform vec3 villageClearing;
 uniform float innerRadius;   // this ring starts here...
 uniform float ringRadius;    // ...and ends here
 uniform float widthScale;
@@ -60,7 +60,8 @@ void main() {
     vec2 cellPos = tileOrigin + (vec2(cell) + 0.5) * spacing;
     float c1 = hash(cellPos), c2 = hash(cellPos + 17.3), c3 = hash(cellPos + 5.5);
     vec2 clump = cellPos + (vec2(c1, c2) - 0.5) * spacing * 0.9;
-    if (villageClearing.z > 0.0 && all(lessThan(abs(clump-villageClearing.xy),vec2(villageClearing.z)))) { cull(); return; }
+    // No grass on village streets, the plaza or under houses
+    if (villageMaskCovered(clump)) { cull(); return; }
 
     float dist = length(clump - viewPos.xz);
     // Rings hand over with a dithered overlap; far clumps thin out
@@ -144,6 +145,7 @@ void main() {
         float need = textureLod(sunShadowTex, pos.xz / (2.0 * shadowHalf) + 0.5, 0.0).r;
         sh = mix(1.0, smoothstep(need - 0.3, need + 1.0, pos.y), shadowStrength);
     }
+    sh = min(sh, villageSunShadowFast(pos + vec3(0.0, 0.05, 0.0)));   // houses shade the lawns
     float canopy = hasCanopyShade == 1 ? textureLod(canopyShade, pos.xz / (2.0 * canopyHalf) + 0.5, 0.0).r : 0.0;
 
     // Colour variation: lush, deep and dry clumps, following the meadow noise
@@ -158,6 +160,7 @@ void main() {
     vec3 ground = textureLod(matAlbedo, vec3(root * (0.16 * texScale), 0.0), 6.0).rgb * grassTint;
     BaseColor = mix(vec3(0.20, 0.34, 0.08), ground * 1.1, 0.4);
     Ambient = skyAmbient(vec3(0.0, 1.0, 0.0)) * 0.6;
+    if (grassLights > 0) Ambient += pointLighting(pos, vec3(0.0, 1.0, 0.0), grassLights);
     if (underwater == 1) Fog = vec4(uwColor, 1.0 - exp(-length(pos - viewPos) * 0.035));
     else Fog = vec4(fogBaseColor(normalize(pos - viewPos)), fogAmount(pos));
     FragPos = pos;

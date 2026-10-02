@@ -170,6 +170,7 @@ bool Engine::init(bool fullscreen) {
                                       "Engine/shaders/village_frag.glsl");
   villageShadowShader_ = shaders_.loadProgram("villageShadow", "Engine/shaders/village_shadow_vert.glsl",
                                             "Engine/shaders/village_shadow_frag.glsl");
+  village_.init("assets/textures/village");
   noiseTex_ = Textures::createNoise(256);
   waterDetailTex_ = Textures::createWaterDetail(256);
   renderer_.setPrograms(terrainShader_, shaderProgram_, skyShader_);
@@ -179,7 +180,7 @@ bool Engine::init(bool fullscreen) {
   // Generate initial procedural terrain via Terrain subsystem
   terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_,
                               textureTile_, terrainParams_);
-  village_.generate(terrain_);
+  village_.generate(terrain_, terrainParams_.seed);
   replantTrees();
   placePlayerOnLand();
 
@@ -261,6 +262,7 @@ bool Engine::load_flat_terrain(const std::string &texturePath) {
     return false;
   village_.clear();
   foliage_.setClearing(glm::vec3(0));
+  foliage_.setPlantedTrees({});
   terrain_.setFlatScale(glm::vec3(terrainSize_ * terrainScale_ * 0.5f, 1.0f,
                                   terrainSize_ * terrainScale_ * 0.5f));
 
@@ -342,8 +344,12 @@ void Engine::renderFrame(GLuint outputFbo, int outW, int outH) {
     gpuTimers_.end();
     lastShadowBuild_ = nowSec;
   }
+  gatherLights(lightCol);
   for (GLuint p : {shaderProgram_, terrainShader_, waterShader_, grassShader_, treeShader_, impostorShader_, villageShader_})
     setPerFrameUniforms(p, lightDir, lightCol, uwColor);
+  // Lamp light on the grass is a per-vertex cost; only worth it once it is getting dark
+  glUseProgram(grassShader_);
+  glUniform1i(glGetUniformLocation(grassShader_, "grassLights"), daylight_ < 0.5f ? std::min(numOutdoorLights_, 4) : 0);
   glUseProgram(skyShader_);
   glUniform1i(glGetUniformLocation(skyShader_, "underwater"), underwater_ ? 1 : 0);
   glUniform3fv(glGetUniformLocation(skyShader_, "uwColor"), 1, &uwColor.x);
@@ -357,6 +363,12 @@ void Engine::renderFrame(GLuint outputFbo, int outW, int outH) {
   glClearColor(0.53f, 0.8f, 1.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+  // Village first: its walls hide the terrain behind them (and everything else) early
+  gpuTimers_.begin("village");
+  village_.draw(villageShader_, villageShadowShader_, view, proj, foliage_.textureArray(),
+                villageLamps_ ? lampIntensity_ : 0.0f, swimTime_);
+  gpuTimers_.end();
+
   gpuTimers_.begin("terrain+sky");
   renderer_.drawFrame(view, proj, glm::mat4(1.0f), invView, invProj, cameraPos_,
                       sky_.hasCubemap(), swimTime_, cloudEnabled_, cloudSpeed_,
@@ -366,7 +378,9 @@ void Engine::renderFrame(GLuint outputFbo, int outW, int outH) {
   gpuTimers_.begin("trees+grass");
   foliage_.draw(terrain_, foliageParams_, view, proj, cameraPos_, swimTime_);
   models_.drawAll(shaderProgram_, view, proj);
-  village_.draw(villageShader_, view, proj);
+  gpuTimers_.end();
+  gpuTimers_.begin("village glass");
+  village_.drawGlass(villageShader_, view, proj);
   gpuTimers_.end();
 
   // Ocean last: it is transparent and must blend over everything below it
@@ -522,6 +536,11 @@ void Engine::setPerFrameUniforms(GLuint prog, const glm::vec3 &lightDir,
   // Sun shadow height map on unit 10, canopy shade on unit 6
   sunShadow_.bind(prog, 10, terrain_.getHalfExtent(), graphics_.shadowStrength, graphics_.shadows);
   village_.bindShadow(prog, 13, graphics_.shadowStrength, graphics_.shadows);
+  village_.bindMask(prog, 14);
+  glUniform1i(glGetUniformLocation(prog, "numPointLights"), numPointLights_);
+  glUniform1i(glGetUniformLocation(prog, "numOutdoorLights"), numOutdoorLights_);
+  glUniform4fv(glGetUniformLocation(prog, "pointLightPos"), 16, &pointLightPos_[0].x);
+  glUniform4fv(glGetUniformLocation(prog, "pointLightColor"), 16, &pointLightColor_[0].x);
   foliage_.bindCanopyShade(prog, 6, terrain_.getHalfExtent());
 }
 
@@ -567,10 +586,16 @@ void Engine::updateMovement(float dt) {
       village_.collide(cameraPos_);
     }
     foliage_.resolveCollision(cameraPos_);
-    ground = terrain_.getHeightAt(cameraPos_.x, cameraPos_.z);
+    // Ground under the feet: terrain, or a village floor / stair / step
+    ground = groundHeight(cameraPos_.x, cameraPos_.z, cameraPos_.y - eyeHeight);
     surface = terrain_.getWaterSurfaceAt(cameraPos_.x, cameraPos_.z, swimTime_);
-    depth = surface - ground;
+    depth = surface - terrain_.getHeightAt(cameraPos_.x, cameraPos_.z);
 
+    // Walked off an edge (balcony, stairwell): fall instead of snapping down
+    if (!jumping_ && cameraPos_.y - eyeHeight > ground + 0.6f) {
+      jumping_ = true;
+      jumpVel_ = 0.0f;
+    }
     if (jumping_) {
       cameraPos_.y += jumpVel_ * dt;
       jumpVel_ -= 18.0f * dt;
@@ -643,16 +668,69 @@ void Engine::updateMovement(float dt) {
 }
 
 // ----------------- Runtime config API -----------------
+float Engine::groundHeight(float x, float z, float feetY) const {
+  return std::max(terrain_.getHeightAt(x, z), village_.groundAt(x, z, feetY));
+}
+
+void Engine::gatherLights(const glm::vec3 &sunColor) {
+  // Pick the 16 lights nearest to the camera. Outdoor lamps are dimmed in bright daylight
+  // (they still glow), interior lamps and fires always matter because interiors are shaded.
+  numPointLights_ = numOutdoorLights_ = 0;
+  daylight_ = glm::smoothstep(0.3f, 0.9f, glm::dot(sunColor, glm::vec3(0.3f, 0.6f, 0.1f)));
+  // In full daylight a lamp's pool of light is invisible: skip the per-pixel light loops then
+  // (lantern glass still glows; interior lamps and fires are applied per house regardless)
+  if (!villageLamps_ || !village_.active() || daylight_ > 0.8f) return;
+  const auto &all = village_.lights();
+  std::vector<std::pair<float, int>> order;
+  for (int i = 0; i < (int)all.size(); ++i) {
+    if (!all[i].outdoor) continue;   // interior lights are applied per house by the village
+    float d = glm::length(all[i].pos - cameraPos_);
+    if (d < 160.0f) order.push_back({d, i});
+  }
+  std::sort(order.begin(), order.end());
+  if (order.size() > 6) order.resize(6);
+  float daylight = glm::smoothstep(0.3f, 0.9f, glm::dot(sunColor, glm::vec3(0.3f, 0.6f, 0.1f)));
+  daylight_ = daylight;
+  float t = swimTime_;
+  for (const auto &o : order) {
+    const VillageLight &L = all[o.second];
+    float f = 1.0f;
+    if (L.flicker > 0.0f)
+      f += L.flicker * (0.5f * std::sin(t * 13.0f + o.second * 1.7f) + 0.3f * std::sin(t * 7.3f + o.second * 2.9f) +
+                        0.2f * std::sin(t * 23.0f + o.second));
+    float scale = lampIntensity_ * f * (L.outdoor ? glm::mix(1.0f, 0.3f, daylight) : 1.0f);
+    pointLightPos_[numPointLights_] = glm::vec4(L.pos, L.radius);
+    pointLightColor_[numPointLights_] = glm::vec4(L.color * scale, 0.0f);
+    ++numPointLights_;
+    if (L.outdoor) ++numOutdoorLights_;
+  }
+}
+
+void Engine::regenerateVillage() {
+  // A new village needs fresh terrain (the old terraces are carved into it)
+  regenerateTerrain();
+}
+
+void Engine::teleportToVillage() {
+  if (!village_.active()) return;
+  cameraPos_ = village_.spawn();
+  yaw_ = village_.spawnYaw();
+  pitch_ = -4.0f;
+  swimming_ = underwater_ = jumping_ = false;
+  jumpVel_ = 0.0f;
+}
+
 void Engine::regenerateTerrain() {
   terrain_.generateProcedural(terrainSize_, terrainScale_, heightScale_,
                               textureTile_, terrainParams_);
-  village_.generate(terrain_);
+  village_.generate(terrain_, terrainParams_.seed);
   replantTrees();
   placePlayerOnLand();
 }
 
 void Engine::replantTrees() {
   foliage_.setClearing(village_.clearing());
+  foliage_.setPlantedTrees(village_.plantedTrees());
   foliage_.generate(terrain_, foliageParams_, terrainParams_.seed);
   terrain_.buildMinimap(512, &foliage_.treeDots());
   sunShadow_.invalidate(); // trees and terrain changed: shadows are rebuilt next frame
@@ -660,7 +738,7 @@ void Engine::replantTrees() {
 
 void Engine::placePlayerOnLand() {
   if (village_.active()) {
-    cameraPos_ = village_.spawn(); yaw_ = -90.0f; pitch_ = -5.0f;
+    cameraPos_ = village_.spawn(); yaw_ = village_.spawnYaw(); pitch_ = -4.0f;
     swimming_ = underwater_ = jumping_ = false;
     jumpVel_ = 0; oxygen_ = 1;
     return;

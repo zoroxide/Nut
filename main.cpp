@@ -30,9 +30,8 @@ int main(int argc, char** argv) {
     // A reproducible render/collision check, without entering the interactive loop.
     if (smoke) {
         if (!engine.village().active()) return 2;
-        glm::vec3 center = engine.village().center();
-        glm::vec3 door = center + glm::vec3(-30,1.7f,-13);
-        glm::vec3 wall = center + glm::vec3(-27,1.7f,-13);
+        glm::vec3 door = engine.village().testDoorway();
+        glm::vec3 wall = engine.village().testWall();
         glm::vec3 originalDoor = door, originalWall = wall;
         engine.village().collide(door);
         engine.village().collide(wall);

@@ -29,6 +29,7 @@ private:
     void drawMinimap();
     void drawFoliagePanel();
     void drawGraphicsPanel();
+    void drawVillagePanel();
     Engine* engine_;
     GLFWwindow* window_;
     bool initialized_;

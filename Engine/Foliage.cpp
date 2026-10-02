@@ -429,8 +429,7 @@ void Foliage::generate(const Terrain& terrain, const FoliageParams& params, int 
             for (float x = -half + spacing; x < half - spacing; x += spacing) {
                 float px = x + (U(rng) - 0.5f) * spacing * 0.9f, pz = z + (U(rng) - 0.5f) * spacing * 0.9f;
                 float h = terrain.getHeightAt(px, pz);
-                if (clearing_.z > 0 && std::abs(px-clearing_.x)<clearing_.z+5 &&
-                    std::abs(pz-clearing_.y)<clearing_.z+5) continue;
+                if (clearing_.z > 0 && glm::length(glm::vec2(px - clearing_.x, pz - clearing_.y)) < clearing_.z) continue;
                 if (h < beachTop || h > treeLine) continue;
                 float dx = terrain.getHeightAt(px + 1.5f, pz) - terrain.getHeightAt(px - 1.5f, pz);
                 float dz = terrain.getHeightAt(px, pz + 1.5f) - terrain.getHeightAt(px, pz - 1.5f);
@@ -457,6 +456,20 @@ void Foliage::generate(const Terrain& terrain, const FoliageParams& params, int 
                 trees_.push_back(t);
                 dots_.push_back(glm::vec3(px, pz, meshes_[t.mesh].radius * t.scale * 0.7f));
             }
+    }
+
+    // Trees planted by the village (plaza, gardens)
+    for (const glm::vec4& p : planted_) {
+        Tree t;
+        int species = glm::clamp((int)p.w, 0, kSpecies - 1);
+        t.mesh = species * kVariants + (int)(U(rng) * kVariants) % kVariants;
+        t.scale = 0.7f + U(rng) * 0.25f;
+        t.pos = glm::vec3(p);
+        t.yaw = U(rng) * 6.2832f;
+        t.phase = U(rng) * 6.2832f;
+        t.tint = 0.95f + U(rng) * 0.15f;
+        trees_.push_back(t);
+        dots_.push_back(glm::vec3(t.pos.x, t.pos.z, meshes_[t.mesh].radius * t.scale * 0.7f));
     }
 
     // Collision grid
@@ -659,7 +672,6 @@ void Foliage::drawGrass(const Terrain& terrain, const FoliageParams& params, con
     setWind(p, terrain, params, VP);
     auto U = [&](const char* nm) { return glGetUniformLocation(p, nm); };
     glUniform1f(U("radius"), params.grassRadius);
-    glUniform3fv(U("villageClearing"), 1, &clearing_[0]);
     glUniform1f(U("bladeHeight"), params.grassHeight);
     glUniform1f(U("terrainHalf"), terrain.getHalfExtent());
     glUniform1f(U("waterY"), terrain.getWaterY());

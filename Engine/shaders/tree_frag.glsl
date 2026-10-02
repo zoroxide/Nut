@@ -36,7 +36,7 @@ void main() {
     vec3 amb = skyAmbient(n) * mix(vec3(0.5, 0.48, 0.38), vec3(1.0), n.y * 0.5 + 0.5) * 0.6;
     float ndl = dot(n, light);
     float diff = leaf ? clamp(ndl * 0.6 + 0.4, 0.0, 1.0) : max(ndl, 0.0);
-    vec3 col = (amb + lightColor * diff * 0.85 * shadow) * albedo * AO;
+    vec3 col = (amb + lightColor * diff * 0.85 * shadow + pointLighting(FragPos, n, numOutdoorLights)) * albedo * AO;
     if (leaf) {
         // Sunlight shining through the leaves when looking towards the sun
         float trans = pow(max(dot(-v, light), 0.0), 4.0);

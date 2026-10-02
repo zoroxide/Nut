@@ -32,7 +32,7 @@ void main() {
     vec3 amb = skyAmbient(n) * mix(vec3(0.5, 0.48, 0.38), vec3(1.0), n.y * 0.5 + 0.5) * 0.6;
     float ndl = dot(n, light);
     float diff = leaf ? clamp(ndl * 0.6 + 0.4, 0.0, 1.0) : max(ndl, 0.0);
-    vec3 col = (amb + lightColor * diff * 0.85 * shadow) * albedo;
+    vec3 col = (amb + lightColor * diff * 0.85 * shadow + pointLighting(FragPos, n, numOutdoorLights)) * albedo;
     if (leaf) col += lightColor * albedo * vec3(0.9, 1.0, 0.5) * pow(max(dot(-v, light), 0.0), 4.0) * 0.6 * shadow;
     FragColor = vec4(applyFog(col, FragPos), 1.0);
 }

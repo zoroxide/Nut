@@ -92,14 +92,24 @@ int main() {
 
 # World
 
-The island now includes a procedural village built with the CC0 materials in
-`assets/textures/village`. You spawn on its central path facing the square; the
-minimap labels its location. Eight cottages have open doorways, window openings,
-beds, tables, stools, cupboards, shelves and hearths. The square includes a well,
-market stalls, crates, benches and garden fences. Walls and furniture block walking.
-The settlement chooses a dry site, levels the ground with blended edges, and clears
-vegetation from its footprint whenever terrain is regenerated. Very small maps or
-maps without enough dry land skip village placement and use the normal beach spawn.
+The island has a procedurally planned village (CC0 materials in `assets/textures/village`).
+It picks a gentle, dry site with a view of the sea, lays out a fountain plaza with three or
+four cobbled streets winding out along the hillside, and lines them with 10-16 houses that
+face the street, each on its own terrace blended into the slope. You start at the end of
+the main street, looking up towards the plaza.
+
+- **Houses**: pastel plaster with stone corners and foundations, terracotta roofs, glass
+  windows with painted shutters and flower boxes, open doors, door lanterns, chimneys,
+  door canopies and balconies. One- and two-storey houses; two-storey ones have stairs.
+- **Interiors**: fireplaces with animated fire, tables and chairs, rugs, beds with night
+  stands and candles, wardrobes, cabinets with jars, ceiling beams and hanging lamps.
+- **Lights**: lamps, fires and lanterns are real point lights; houses are lit by their own
+  lamps, and from dusk the street lamps light the streets, grass and trees. Buildings cast
+  sun shadows (sunlight falls through the windows onto the floors).
+- **Plaza**: a two-tier fountain, benches, market stalls, planters, barrels, crates and trees.
+- **Gameplay**: walls, furniture and props block you; floors, steps, stairs and balconies are
+  walkable, and you fall off edges.
+- **Settings** (Tab -> Village): go to the village, lamps on/off, light intensity, new village.
 
 Use `build/windows/program.exe --windowed` on Windows or
 `./build/linux/program --windowed` on Linux for a windowed session (run from the

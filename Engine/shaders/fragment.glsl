@@ -20,6 +20,6 @@ void main() {
     float spec = pow(max(dot(v, reflect(-light, n)), 0.0), 32.0);
     vec3 base = (useSolidColor == 1) ? solidColor : texture(texture1, TexCoords).rgb;
     float shadow = sunShadow(FragPos + n * 0.3);
-    vec3 color = (skyAmbient(n) * 0.5 + diff * lightColor * shadow) * base + 0.25 * spec * lightColor * shadow;
+    vec3 color = (skyAmbient(n) * 0.5 + diff * lightColor * shadow + pointLighting(FragPos, n, numPointLights)) * base + 0.25 * spec * lightColor * shadow;
     FragColor = vec4(applyFog(color, FragPos), 1.0);
 }

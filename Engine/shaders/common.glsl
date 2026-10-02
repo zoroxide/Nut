@@ -39,6 +39,19 @@ uniform float villageShadowStrength;
 
 uniform sampler2D noiseTex;       // tileable noise, 4 octaves in r,g,b,a
 
+// Point lights (village lamps, lanterns, fires): the nearest ones to the camera, outdoor lights first.
+// Terrain / grass / trees only use the outdoor ones; buildings use all of them.
+#define MAX_POINT_LIGHTS 16
+uniform int numPointLights;
+uniform int numOutdoorLights;
+uniform vec4 pointLightPos[MAX_POINT_LIGHTS];     // xyz, radius
+uniform vec4 pointLightColor[MAX_POINT_LIGHTS];   // rgb (intensity included)
+
+// Village ground mask (unit 14): r = cobblestone paving, g = no grass (paving, house footprints)
+uniform sampler2D villageMask;
+uniform int hasVillageMask;
+uniform vec4 villageMaskRect;     // min x, min z, 1/size x, 1/size z
+
 vec3 aces(vec3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
@@ -79,16 +92,51 @@ float villageSunShadow(vec3 p) {
     vec2 texel = 1.0 / vec2(textureSize(villageShadowTex, 0));
     // Small receiver bias plus hardware-filtered 3x3 PCF: stable soft edges,
     // including thin frames and furniture, without detaching wall shadows.
+    // 4 hardware-filtered taps (each already a 2x2 comparison): soft edges at a third of the cost
     float visibility = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-            visibility += texture(villageShadowTex, vec3(q.xy + vec2(x, y) * texel, q.z - 0.00018));
-    return mix(1.0, visibility / 9.0, villageShadowStrength);
+    for (int i = 0; i < 4; ++i) {
+        vec2 o = vec2((i & 1) == 0 ? -0.5 : 0.5, (i & 2) == 0 ? -0.5 : 0.5) * texel * 1.5;
+        visibility += texture(villageShadowTex, vec3(q.xy + o, q.z - 0.00018));
+    }
+    return mix(1.0, visibility * 0.25, villageShadowStrength);
+}
+
+// One hardware-filtered tap: for per-vertex use (grass)
+float villageSunShadowFast(vec3 p) {
+    if (hasVillageShadow == 0) return 1.0;
+    vec3 q = (villageLightViewProj * vec4(p, 1.0)).xyz * 0.5 + 0.5;
+    if (any(lessThanEqual(q, vec3(0.0))) || any(greaterThanEqual(q, vec3(1.0)))) return 1.0;
+    return mix(1.0, texture(villageShadowTex, vec3(q.xy, q.z - 0.0003)), villageShadowStrength);
 }
 
 float sunShadow(vec3 p) {
     return min(terrainSunShadow(p), villageSunShadow(p));
 }
+
+vec3 pointLighting(vec3 p, vec3 n, int count) {
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < MAX_POINT_LIGHTS; ++i) {
+        if (i >= count) break;
+        vec3 L = pointLightPos[i].xyz - p;
+        float r = pointLightPos[i].w;
+        float d2 = dot(L, L);
+        if (d2 > r * r) continue;
+        float d = sqrt(d2);
+        // Smooth window to zero at the radius, inverse-square-ish in between
+        float f = 1.0 - d2 / (r * r);
+        float ndl = max(dot(n, L / max(d, 1e-3)), 0.0) * 0.85 + 0.15 * step(d, 0.9);
+        sum += pointLightColor[i].rgb * ndl * f * f / (1.0 + d2 * 0.3);
+    }
+    return sum;
+}
+
+vec2 villageMaskAt(vec2 xz) {
+    if (hasVillageMask == 0) return vec2(0.0);
+    vec2 uv = (xz - villageMaskRect.xy) * villageMaskRect.zw;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec2(0.0);
+    return textureLod(villageMask, uv, 0.0).rg;
+}
+bool villageMaskCovered(vec2 xz) { return villageMaskAt(xz).g > 0.35; }
 
 vec3 fogBaseColor(vec3 rd) {
     vec3 fc = fogColor;

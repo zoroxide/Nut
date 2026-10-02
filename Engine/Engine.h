@@ -126,6 +126,13 @@ private:
     Village village_;
     GLuint villageShader_ = 0;
     GLuint villageShadowShader_ = 0;
+    bool villageLamps_ = true;
+    float lampIntensity_ = 1.0f;
+    // Nearest point lights this frame (outdoor ones first), uploaded to every scene shader
+    int numPointLights_ = 0, numOutdoorLights_ = 0;
+    float daylight_ = 1.0f;
+    glm::vec4 pointLightPos_[16], pointLightColor_[16];
+    void gatherLights(const glm::vec3& sunColor);
     Renderer renderer_;
 
     // Configurable constants (moved from macros to members so we can change them at runtime)
@@ -217,6 +224,12 @@ public: // Public API
     // Player / minimap
     const Terrain& terrain() const { return terrain_; }
     const Village& village() const { return village_; }
+    // Village lights (lamps, lanterns, fires) and the player's standing height (terrain or floors)
+    bool& villageLamps() { return villageLamps_; }
+    float& lampIntensity() { return lampIntensity_; }
+    void regenerateVillage();
+    void teleportToVillage();
+    float groundHeight(float x, float z, float feetY) const;
     const glm::vec3& getPlayerPos() const { return cameraPos_; }
     float getYaw() const { return yaw_; }
 

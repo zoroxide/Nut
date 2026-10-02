@@ -134,8 +134,9 @@ float PostProcess::updateScale(const GraphicsSettings& g, float gpuMs) {
     float budget = 1000.0f / std::max(g.targetFps, 10.0f);
     // Keep the GPU frame just under budget: with VSync, missing 16.6 ms by a little halves the FPS.
     // Small steps per frame so the image doesn't pump; only part of the cost scales with resolution.
-    if (gpuMs > budget * 0.95f) scale_ -= glm::clamp((gpuMs / budget - 0.95f) * 0.2f, 0.005f, 0.03f);
-    else if (gpuMs < budget * 0.82f) scale_ += 0.005f;
+    // The timed passes don't include the small gaps between them, so aim a little lower
+    if (gpuMs > budget * 0.85f) scale_ -= glm::clamp((gpuMs / budget - 0.85f) * 0.2f, 0.005f, 0.03f);
+    else if (gpuMs < budget * 0.72f) scale_ += 0.005f;
     scale_ = glm::clamp(scale_, g.minScale, g.maxScale);
     return scale_;
 }
